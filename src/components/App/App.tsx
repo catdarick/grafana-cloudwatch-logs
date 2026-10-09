@@ -345,7 +345,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   timeColumn: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2) }),
   // Same size whatever the picker above shows (Relative grid or Absolute fields).
-  runButton: css({ flex: '0 0 auto', height: theme.spacing(6) }),
+  // Pinned to the bottom of the column so it does not move when the picker above changes height.
+  runButton: css({ flex: '0 0 auto', height: theme.spacing(6), marginTop: 'auto' }),
   title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
