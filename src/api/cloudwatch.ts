@@ -157,3 +157,16 @@ export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResu
   }
   return { fields, rows };
 }
+
+interface LogGroupFieldsResponseItem {
+  value: { name: string; percent: number };
+}
+
+/** Field names CloudWatch discovered in a log group over the last 15 minutes. */
+export async function fetchLogGroupFields(datasourceUid: string, group: LogGroupRef): Promise<string[]> {
+  const items = await getBackendSrv().get<LogGroupFieldsResponseItem[]>(
+    `/api/datasources/uid/${datasourceUid}/resources/log-group-fields`,
+    { logGroupName: group.name, region: group.region }
+  );
+  return (items ?? []).map((item) => item.value.name);
+}

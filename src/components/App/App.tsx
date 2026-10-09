@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
-import { AppRootProps, GrafanaTheme2 } from '@grafana/data';
+import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, getDataSourceSrv } from '@grafana/runtime';
 import { Alert, Button, useStyles2 } from '@grafana/ui';
-import { cancelQuery, runLogsQuery } from '../../api/cloudwatch';
+import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
 import { AppSettings, QueryResult } from '../../types';
 import { describeTimeRange, formatTime, isValidRange, toEpochRange } from '../../utils/timeRange';
@@ -28,6 +28,30 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const [results, setResults] = useState<Record<string, QueryResult | undefined>>({});
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [runError, setRunError] = useState<Record<string, string | undefined>>({});
+  const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
+
+  // Autocomplete: fields CloudWatch has seen in the selected groups, plus fields from earlier results.
+  useEffect(() => {
+    if (!datasourceUid) {
+      return;
+    }
+    for (const group of tab.logGroups) {
+      const key = `${group.region}:${group.name}`;
+      if (discoveredFields[key]) {
+        continue;
+      }
+      fetchLogGroupFields(datasourceUid, group)
+        .then((fields) => setDiscoveredFields((d) => ({ ...d, [key]: fields })))
+        .catch(() => setDiscoveredFields((d) => ({ ...d, [key]: [] })));
+    }
+  }, [datasourceUid, tab.logGroups, discoveredFields]);
+
+  const completionFields = useMemo(() => {
+    const names = new Set<string>();
+    tab.logGroups.forEach((g) => discoveredFields[`${g.region}:${g.name}`]?.forEach((f) => names.add(f)));
+    Object.values(results).forEach((r) => r?.fields.forEach((f) => names.add(f)));
+    return Array.from(names).sort();
+  }, [tab.logGroups, discoveredFields, results]);
 
   const dsRegion = datasourceUid
     ? (getDataSourceSrv().getInstanceSettings(datasourceUid)?.jsonData as { defaultRegion?: string } | undefined)
@@ -70,31 +94,29 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const error = runError[tab.id] ?? result?.error;
 
   return (
-    <PluginPage>
+    <PluginPage layout={PageLayoutType.Canvas}>
       <div className={s.page} data-testid={testIds.app.container}>
-        <div className={s.dsRow}>
-          <span className={s.dsLabel}>Data source</span>
+        <div className={s.topBar}>
+          <QueryTabs
+            tabs={ws.state.tabs}
+            activeTabId={tab.id}
+            results={results}
+            running={running}
+            onSelect={ws.selectTab}
+            onClose={(id) => {
+              cancelQuery(requestId(id));
+              ws.closeTab(id);
+            }}
+            onAdd={() => ws.addTab(tab)}
+            onRename={(id, title) => ws.updateTab(id, { title })}
+          />
           <DataSourcePicker
             pluginId="cloudwatch"
             current={datasourceUid ?? null}
-            width={40}
+            width={28}
             onChange={(ds) => setDatasourceUid(ds.uid)}
           />
         </div>
-
-        <QueryTabs
-          tabs={ws.state.tabs}
-          activeTabId={tab.id}
-          results={results}
-          running={running}
-          onSelect={ws.selectTab}
-          onClose={(id) => {
-            cancelQuery(requestId(id));
-            ws.closeTab(id);
-          }}
-          onAdd={() => ws.addTab(tab)}
-          onRename={(id, title) => ws.updateTab(id, { title })}
-        />
 
         <LogGroups
           key={`${tab.id}:${defaultRegion}`}
@@ -108,7 +130,9 @@ function App({ meta }: AppRootProps<AppSettings>) {
 
         <div className={s.editorRow}>
           <QueryEditor
+            key={tab.id}
             query={tab.query}
+            fields={completionFields}
             savedQueryName={tab.savedQueryName}
             savedQueries={ws.state.savedQueries}
             onChange={(query, savedQueryName) => ws.updateTab(tab.id, { query, savedQueryName })}
@@ -179,9 +203,14 @@ function errorMessage(e: unknown): string {
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  page: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2) }),
-  dsRow: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1) }),
-  dsLabel: css({ color: theme.colors.text.secondary }),
+  page: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2), padding: theme.spacing(2) }),
+  topBar: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(2),
+    paddingBottom: theme.spacing(1),
+    borderBottom: `1px solid ${theme.colors.border.weak}`,
+  }),
   editorRow: css({
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) 360px',

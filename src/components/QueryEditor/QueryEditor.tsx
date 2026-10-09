@@ -1,11 +1,32 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2, SelectableValue } from '@grafana/data';
-import { Button, Field, IconButton, Input, Modal, Select, TextArea, useStyles2 } from '@grafana/ui';
+import {
+  Button,
+  CodeEditor,
+  CodeEditorSuggestionItem,
+  CodeEditorSuggestionItemKind,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  Select,
+  useStyles2,
+} from '@grafana/ui';
+import {
+  COMMANDS,
+  FUNCTIONS,
+  KEYWORDS,
+  LANGUAGE_ID,
+  SYSTEM_FIELDS,
+  registerLogsInsights,
+} from '../../language/logsInsights';
 import { SavedQuery } from '../../types';
 
 interface Props {
   query: string;
+  /** Field names offered by autocomplete (discovered from log groups and past results). */
+  fields: string[];
   savedQueryName?: string;
   savedQueries: SavedQuery[];
   onChange: (query: string, savedQueryName?: string) => void;
@@ -14,10 +35,31 @@ interface Props {
   onDelete: (name: string) => void;
 }
 
-export function QueryEditor({ query, savedQueryName, savedQueries, onChange, onRun, onSave, onDelete }: Props) {
+export function QueryEditor({ query, fields, savedQueryName, savedQueries, onChange, onRun, onSave, onDelete }: Props) {
   const s = useStyles2(getStyles);
   const [saveOpen, setSaveOpen] = useState(false);
   const [name, setName] = useState('');
+
+  // Monaco keeps the callbacks it was mounted with, so read the latest values through refs.
+  const onChangeRef = useRef((value: string) => onChange(value, savedQueryName));
+  const runRef = useRef(onRun);
+  const fieldsRef = useRef(fields);
+  useLayoutEffect(() => {
+    onChangeRef.current = (value: string) => onChange(value, savedQueryName);
+    runRef.current = onRun;
+    fieldsRef.current = fields;
+  });
+
+  const getSuggestions = (): CodeEditorSuggestionItem[] => [
+    ...COMMANDS.map((label) => ({ label, kind: CodeEditorSuggestionItemKind.Method, detail: 'command' })),
+    ...FUNCTIONS.map((label) => ({ label, kind: CodeEditorSuggestionItemKind.Method, detail: 'function' })),
+    ...KEYWORDS.map((label) => ({ label, kind: CodeEditorSuggestionItemKind.Text, detail: 'keyword' })),
+    ...Array.from(new Set([...SYSTEM_FIELDS, ...fieldsRef.current])).map((label) => ({
+      label,
+      kind: CodeEditorSuggestionItemKind.Field,
+      detail: 'field',
+    })),
+  ];
 
   const options: Array<SelectableValue<string>> = savedQueries.map((q) => ({ label: q.name, value: q.name }));
   const current = savedQueries.find((q) => q.name === savedQueryName);
@@ -67,17 +109,19 @@ export function QueryEditor({ query, savedQueryName, savedQueries, onChange, onR
           )}
         </div>
       </div>
-      <TextArea
-        className={s.editor}
+      <CodeEditor
+        language={LANGUAGE_ID}
         value={query}
-        spellCheck={false}
-        rows={10}
-        onChange={(e) => onChange(e.currentTarget.value, savedQueryName)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            onRun();
-          }
+        height={220}
+        showLineNumbers
+        showMiniMap={false}
+        containerStyles={s.editor}
+        monacoOptions={{ wordWrap: 'on', scrollBeyondLastLine: false, fontSize: 13, renderLineHighlight: 'none' }}
+        getSuggestions={getSuggestions}
+        onBeforeEditorMount={registerLogsInsights}
+        onEditorDidMount={(editor, monaco) => {
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
+          editor.onDidChangeModelContent(() => onChangeRef.current(editor.getValue()));
         }}
       />
       <Modal title="Save query" isOpen={saveOpen} onDismiss={() => setSaveOpen(false)}>

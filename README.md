@@ -25,7 +25,8 @@ src/
   components/App/App.tsx       the whole page
   components/TimeRangePicker/  the ported time range picker
   components/LogGroups/        favorite and searchable log groups
-  components/QueryEditor/      editor + saved queries
+  components/QueryEditor/      editor (Monaco) + saved queries
+  language/logsInsights.ts     Logs Insights syntax highlighting
   components/Tabs/             tabs
   components/Results/          results table with a filter and expandable rows
   components/AppConfig/        settings page (default data source and region)

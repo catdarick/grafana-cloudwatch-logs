@@ -9,6 +9,26 @@ interface Props {
 }
 
 const PAGE = 500;
+const LEVEL_FIELDS = ['severity', 'level', 'loglevel', 'log_level', 'lvl'];
+
+type Level = 'error' | 'warning' | 'debug' | undefined;
+
+function rowLevel(row: Record<string, string>, levelField?: string): Level {
+  const value = levelField ? row[levelField]?.toLowerCase() : undefined;
+  if (!value) {
+    return undefined;
+  }
+  if (/err|fatal|crit|panic|emerg|alert/.test(value)) {
+    return 'error';
+  }
+  if (/warn/.test(value)) {
+    return 'warning';
+  }
+  if (/debug|trace/.test(value)) {
+    return 'debug';
+  }
+  return undefined;
+}
 
 export function ResultsTable({ result }: Props) {
   const s = useStyles2(getStyles);
@@ -24,6 +44,8 @@ export function ResultsTable({ result }: Props) {
     }
     return indexed.filter(({ row }) => Object.values(row).some((v) => v.toLowerCase().includes(needle)));
   }, [result.rows, filter]);
+
+  const levelField = result.fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
 
   const toggle = (index: number) => {
     const next = new Set(expanded);
@@ -50,7 +72,7 @@ export function ResultsTable({ result }: Props) {
           <tbody>
             {rows.slice(0, shown).map(({ row, index }) => (
               <React.Fragment key={index}>
-                <tr>
+                <tr className={s.level[rowLevel(row, levelField) ?? 'none']}>
                   <td className={s.expandCol}>
                     <IconButton
                       size="sm"
@@ -115,6 +137,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
     'tbody tr:hover': { background: theme.colors.action.hover },
   }),
   expandCol: css({ width: 32 }),
+  level: {
+    none: css({}),
+    error: css({ 'td:first-child': { boxShadow: `inset 3px 0 ${theme.colors.error.main}` } }),
+    warning: css({ 'td:first-child': { boxShadow: `inset 3px 0 ${theme.colors.warning.main}` } }),
+    debug: css({ color: theme.colors.text.secondary }),
+  },
   details: css({ margin: 0, whiteSpace: 'pre-wrap', fontSize: theme.typography.bodySmall.fontSize }),
   more: css({
     alignSelf: 'center',
