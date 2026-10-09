@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { css } from '@emotion/css';
+import { css, cx } from '@emotion/css';
 import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
-import { Alert, Button, TimeZonePicker, useStyles2 } from '@grafana/ui';
+import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
-import { PLUGIN_BASE_URL } from '../../constants';
+import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
 import { DEFAULT_COST_PER_GB, estimateCost, formatCost } from '../../utils/cost';
@@ -254,11 +254,27 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
                 {zoneLabel(result.from, ws.state.timeZone)}
               </span>
-              {statsParts(result, settings.costPerGb ?? DEFAULT_COST_PER_GB).map((part) => (
-                <span key={part} className={s.stat}>
-                  {part}
-                </span>
-              ))}
+              {statsParts(result)
+                .slice(0, 2)
+                .map((part) => (
+                  <span key={part} className={s.stat}>
+                    {part}
+                  </span>
+                ))}
+              {result.stats?.bytesScanned !== undefined && (
+                <CostBadge
+                  bytes={result.stats.bytesScanned}
+                  costPerGb={settings.costPerGb ?? DEFAULT_COST_PER_GB}
+                  className={s.stat}
+                />
+              )}
+              {statsParts(result)
+                .slice(2)
+                .map((part) => (
+                  <span key={part} className={s.stat}>
+                    {part}
+                  </span>
+                ))}
               <Button
                 className={s.focusToggle}
                 size="sm"
@@ -288,16 +304,51 @@ function App({ meta }: AppRootProps<AppSettings>) {
 
 export default App;
 
-/** "2.3s", "Scanned 1.2 GB", "≈ $0.0058", "48,312 records", "50 matched": what the query cost and found. */
-function statsParts(result: QueryResult, costPerGb: number): string[] {
+/** "2.3s", "Scanned 1.2 GB", "48,312 records", "50 matched": what the query scanned and found. */
+function statsParts(result: QueryResult): string[] {
   const { bytesScanned, recordsScanned, recordsMatched } = result.stats ?? {};
+  // Duration and bytes come first: the cost badge goes right after them.
   return [
     `${(result.durationMs / 1000).toFixed(1)}s`,
     bytesScanned !== undefined ? `Scanned ${formatBytes(bytesScanned)}` : '',
-    bytesScanned !== undefined ? formatCost(estimateCost(bytesScanned, costPerGb)) : '',
     recordsScanned !== undefined ? `${Math.round(recordsScanned).toLocaleString('en-US')} records` : '',
     recordsMatched !== undefined ? `${Math.round(recordsMatched).toLocaleString('en-US')} matched` : '',
   ].filter(Boolean);
+}
+
+/** The cost estimate, with a tooltip saying how it is worked out and where the price is set. */
+function CostBadge({ bytes, costPerGb, className }: { bytes: number; costPerGb: number; className: string }) {
+  const s = useStyles2(getStyles);
+  const gb = bytes / 2 ** 30;
+  const content = (
+    <div className={s.costTip}>
+      <div>
+        {gb < 0.01 ? gb.toPrecision(2) : gb.toFixed(2)} GB scanned × ${costPerGb} per GB ={' '}
+        {exactCost(estimateCost(bytes, costPerGb))}
+      </div>
+      <div>
+        Logs Insights charges only for data scanned. AWS does not report the cost of a query, so this is an estimate
+        from the list price, not your bill.
+      </div>
+      <div>
+        The price per GB is set by an admin in{' '}
+        <a className={s.costLink} href={`${config.appSubUrl}/plugins/${PLUGIN_ID}`}>
+          Administration → Plugins → CloudWatch Logs
+        </a>
+        .
+      </div>
+    </div>
+  );
+  return (
+    <Tooltip content={content} interactive placement="bottom">
+      <span className={cx(className, s.cost)}>{formatCost(estimateCost(bytes, costPerGb))}</span>
+    </Tooltip>
+  );
+}
+
+/** Full precision for the tooltip, where "< $0.0001" would hide the actual figure. */
+function exactCost(usd: number): string {
+  return `$${usd === 0 ? 0 : usd < 0.01 ? usd.toPrecision(2) : usd.toFixed(4)}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -365,4 +416,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     fontVariantNumeric: 'tabular-nums',
   }),
   focusToggle: css({ marginLeft: 'auto' }),
+  cost: css({ cursor: 'help' }),
+  costTip: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.75), maxWidth: 320 }),
+  costLink: css({ color: theme.colors.text.link, textDecoration: 'underline' }),
 });
