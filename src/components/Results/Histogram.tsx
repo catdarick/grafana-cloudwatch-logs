@@ -38,15 +38,9 @@ export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRang
   };
   const start = bins.length ? bins[0].start : 0;
   const span = bins.length ? bins[bins.length - 1].end - start : 0;
-  // The hatched part, clipped to what the bars show (zoom can cut it).
-  const gap =
-    unloaded && span > 0
-      ? {
-          from: Math.max(unloaded.from, start),
-          to: Math.min(unloaded.to, start + span),
-          whole: unloaded.from >= start && unloaded.to <= start + span,
-        }
-      : undefined;
+  // The hatched part, clipped to what the bars show (zoom can cut it) and snapped to bar edges so
+  // it never covers the bar holding the last loaded log.
+  const gap = unloaded && span > 0 ? snapGap(unloaded, bins, start, start + span) : undefined;
   const showGap = gap && gap.to > gap.from;
   const format = span > 2 * 86400000 ? 'MM-DD HH:mm' : span > 3600000 ? 'HH:mm' : 'HH:mm:ss';
   const inDrag = (i: number) => drag && i >= Math.min(drag.start, drag.end) && i <= Math.max(drag.start, drag.end);
@@ -81,7 +75,7 @@ export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRang
             onMouseLeave={() => setHoverGap(false)}
             onMouseDown={(e) => e.stopPropagation()}
             onMouseUp={(e) => e.stopPropagation()}
-            onClick={() => onRunRange(gap.from, gap.to)}
+            onClick={() => onRunRange(gap.rawFrom, gap.rawTo)}
           />
         )}
         {bins.map((bin, i) => (
@@ -150,7 +144,7 @@ export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRang
           }}
         >
           <div className={s.tooltipTime}>
-            {formatTime(gap.from, timeZone, 'HH:mm:ss')} – {formatTime(gap.to, timeZone, 'HH:mm:ss')}
+            {formatTime(gap.rawFrom, timeZone, 'HH:mm:ss')} – {formatTime(gap.rawTo, timeZone, 'HH:mm:ss')}
           </div>
           <div className={s.tooltipTotal}>
             {gap.whole
@@ -173,6 +167,23 @@ export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRang
       )}
     </div>
   );
+}
+
+function snapGap(unloaded: Unloaded, bins: Bin[], start: number, end: number) {
+  const rawFrom = Math.max(unloaded.from, start);
+  const rawTo = Math.min(unloaded.to, end);
+  let from = rawFrom;
+  let to = rawTo;
+  const fromBin = bins.find((b) => from > b.start && from < b.end);
+  if (fromBin?.total) {
+    from = fromBin.end;
+  }
+  const toBin = bins.find((b) => to > b.start && to < b.end);
+  if (toBin?.total) {
+    to = toBin.start;
+  }
+  // from/to are for drawing; the click and the tooltip use the exact range.
+  return { from, to, rawFrom, rawTo, whole: unloaded.from >= start && unloaded.to <= end };
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
