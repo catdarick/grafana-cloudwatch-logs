@@ -205,19 +205,27 @@ export function ResultsTable({
       : gap.from <= view.from
         ? { from: gap.to, to: view.to }
         : { from: view.from, to: gap.from };
-    const points = rows.flatMap((i) => {
-      const time = result.details[i]?.timestamp;
-      const level = rowLevel(displayRows[i], levelField);
-      return time === undefined ? [] : [{ time, group: level === 'info' || !level ? 'other' : level }];
-    });
-    if (points.length === 0 && !zoom) {
+    const toPoints = (indexes: number[]) =>
+      indexes.flatMap((i) => {
+        const time = result.details[i]?.timestamp;
+        const level = rowLevel(displayRows[i], levelField);
+        return time === undefined ? [] : [{ time, group: level === 'info' || !level ? 'other' : level }];
+      });
+    // Every loaded row in the view, whatever the filters and search say: drawn faintly behind the
+    // bars so filtering does not lose the overall picture.
+    const inView = displayRows.flatMap((_, i) => (inZoom[i] ? [i] : []));
+    const all = toPoints(inView);
+    if (all.length === 0 && !zoom) {
       return undefined;
     }
     // Keep bars about as wide as on a full axis when they only cover part of it.
     const share = (loaded.to - loaded.from) / Math.max(1, view.to - view.from);
     const count = Math.max(1, Math.min(60, Math.round(60 * share)));
-    return { view, gap, bins: loaded.to > loaded.from ? histogram(points, loaded.from, loaded.to, count) : [] };
-  }, [rows, result, displayRows, levelField, zoom, unloaded]);
+    const bin = (points: typeof all) =>
+      loaded.to > loaded.from ? histogram(points, loaded.from, loaded.to, count) : [];
+    const filtering = rows.length < inView.length;
+    return { view, gap, bins: bin(toPoints(rows)), ghost: filtering ? bin(all) : undefined };
+  }, [rows, result, displayRows, levelField, zoom, unloaded, inZoom]);
 
   // What the bars stand for. Without zoom: loaded vs matched for the whole query. With zoom we only
   // know the loaded count in the window, and whether the window reaches into the cut-off part.
@@ -429,6 +437,7 @@ export function ResultsTable({
         <Histogram
           view={histo.view}
           bins={histo.bins}
+          ghost={histo.ghost}
           gap={histo.gap}
           timeZone={timeZone}
           onZoom={(from, to) => setZoom({ from, to })}

@@ -24,6 +24,8 @@ interface Props {
   view: { from: number; to: number };
   /** Bins over the loaded part of the view; they end exactly where the gap starts (or the reverse). */
   bins: Bin[];
+  /** All loaded rows in the view, when filters or search hide some; same bins, drawn faintly. */
+  ghost?: Bin[];
   timeZone: TimeZone;
   /** Drag across bars (or click one) to zoom into them. */
   onZoom: (from: number, to: number) => void;
@@ -36,14 +38,14 @@ interface Props {
 }
 
 /** Logs over time for the loaded rows, stacked by level. */
-export function Histogram({ view, bins, timeZone, onZoom, gap, caption, onRunRange }: Props) {
+export function Histogram({ view, bins, ghost, timeZone, onZoom, gap, caption, onRunRange }: Props) {
   const s = useStyles2(getStyles);
   const theme = useTheme2();
   const [drag, setDrag] = useState<{ start: number; end: number }>();
   // Our own tooltip: the native title one only appears after a delay.
   const [hover, setHover] = useState<number>();
   const [hoverGap, setHoverGap] = useState(false);
-  const max = Math.max(1, ...bins.map((b) => b.total));
+  const max = Math.max(1, ...(ghost ?? bins).map((b) => b.total));
   const colors: Record<string, string> = {
     error: theme.colors.error.main,
     warning: theme.colors.warning.main,
@@ -106,6 +108,19 @@ export function Histogram({ view, bins, timeZone, onZoom, gap, caption, onRunRan
                 }
               }}
             >
+              {ghost?.[i] && ghost[i].total > 0 && (
+                <div className={cx(s.stack, s.ghost)} style={{ height: `${(ghost[i].total / max) * 100}%` }}>
+                  {LEVEL_ORDER.map((level) =>
+                    ghost[i].counts[level] ? (
+                      <div
+                        key={level}
+                        style={{ flexGrow: ghost[i].counts[level], background: colors[level] }}
+                        className={s.segment}
+                      />
+                    ) : null
+                  )}
+                </div>
+              )}
               <div className={s.stack} style={{ height: `${(bin.total / max) * 100}%` }}>
                 {LEVEL_ORDER.map((level) =>
                   bin.counts[level] ? (
@@ -143,7 +158,11 @@ export function Histogram({ view, bins, timeZone, onZoom, gap, caption, onRunRan
               ? range(bins[Math.min(drag.start, drag.end)].start, bins[Math.max(drag.start, drag.end)].end)
               : range(hovered.start, hovered.end)}
           </div>
-          <div className={s.tooltipTotal}>{hovered.total} logs</div>
+          <div className={s.tooltipTotal}>
+            {ghost && hover !== undefined && ghost[hover]
+              ? `${hovered.total} of ${ghost[hover].total} logs shown`
+              : `${hovered.total} logs`}
+          </div>
           {LEVEL_ORDER.filter((l) => hovered.counts[l]).map((l) => (
             <div key={l} className={s.tooltipRow}>
               <span className={s.swatch} style={{ background: colors[l] }} />
@@ -235,6 +254,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: 2,
   }),
   slot: css({
+    position: 'relative',
     flex: 1,
     height: '100%',
     display: 'flex',
@@ -244,7 +264,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     '&:hover': { background: theme.colors.action.hover },
   }),
   selected: css({ background: theme.colors.action.selected }),
+  // Positioned so it paints over the ghost bar behind it.
   stack: css({
+    position: 'relative',
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
@@ -253,6 +275,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
     overflow: 'hidden',
   }),
   segment: css({ minHeight: 1, opacity: 0.85 }),
+  // Rows hidden by filters or search: same bar, faint, behind the visible one.
+  ghost: css({ position: 'absolute', left: 0, right: 0, bottom: 0, opacity: 0.22 }),
   axis: css({
     display: 'flex',
     justifyContent: 'space-between',
