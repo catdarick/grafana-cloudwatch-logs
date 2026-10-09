@@ -325,8 +325,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: 'grid',
     gridTemplateColumns: 'auto 1fr auto',
     alignItems: 'start',
-    alignContent: 'center',
+    // Fields stay where they are; a warning or preview uses the free space below them and only
+    // grows the block when it does not fit. The top padding centres the two fields when nothing
+    // else is shown.
+    alignContent: 'start',
     gap: theme.spacing(1),
+    paddingTop: (CELL * 3 + GAP * 2 - (32 * 2 + 8)) / 2,
     minHeight: CELL * 3 + GAP * 2,
   }),
   absLabel: css({ color: theme.colors.text.secondary, margin: 0, lineHeight: theme.spacing(4) }),
