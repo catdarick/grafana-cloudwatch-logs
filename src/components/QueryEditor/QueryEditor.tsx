@@ -6,9 +6,11 @@ import {
   CodeEditor,
   CodeEditorSuggestionItem,
   CodeEditorSuggestionItemKind,
+  Dropdown,
   Field,
   IconButton,
   Input,
+  Menu,
   Modal,
   Select,
   useStyles2,
@@ -33,9 +35,23 @@ interface Props {
   onRun: () => void;
   onSave: (query: SavedQuery) => void;
   onDelete: (name: string) => void;
+  /** Relative ranges get a second option that pins the time, so the link shows the same logs later. */
+  relativeTime: boolean;
+  onCopyLink: (fixedTime: boolean) => void;
 }
 
-export function QueryEditor({ query, fields, savedQueryName, savedQueries, onChange, onRun, onSave, onDelete }: Props) {
+export function QueryEditor({
+  query,
+  fields,
+  savedQueryName,
+  savedQueries,
+  onChange,
+  onRun,
+  onSave,
+  onDelete,
+  relativeTime,
+  onCopyLink,
+}: Props) {
   const s = useStyles2(getStyles);
   const [saveOpen, setSaveOpen] = useState(false);
   const [name, setName] = useState('');
@@ -85,6 +101,35 @@ export function QueryEditor({ query, fields, savedQueryName, savedQueries, onCha
       <div className={s.header}>
         <h5 className={s.title}>Query editor</h5>
         <div className={s.saved}>
+          {relativeTime ? (
+            <Dropdown
+              placement="bottom-end"
+              overlay={
+                <Menu>
+                  <Menu.Item
+                    label="Copy link"
+                    description="Keeps the relative range: opens the latest logs"
+                    icon="link"
+                    onClick={() => onCopyLink(false)}
+                  />
+                  <Menu.Item
+                    label="Copy link with fixed time"
+                    description="Pins the range of the last run, or now if not run yet"
+                    icon="clock-nine"
+                    onClick={() => onCopyLink(true)}
+                  />
+                </Menu>
+              }
+            >
+              <Button size="sm" variant="secondary" fill="text" icon="link">
+                Copy link
+              </Button>
+            </Dropdown>
+          ) : (
+            <Button size="sm" variant="secondary" fill="text" icon="link" onClick={() => onCopyLink(false)}>
+              Copy link
+            </Button>
+          )}
           <Select
             width={32}
             isClearable
@@ -151,9 +196,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
   header: css({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: theme.spacing(1) }),
   title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
   saved: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
+  // Monaco has no border of its own; frame it like a Grafana input so it reads as a text field.
   editor: css({
     fontFamily: theme.typography.fontFamilyMonospace,
     fontSize: theme.typography.bodySmall.fontSize,
     minHeight: 200,
+    border: `1px solid ${theme.components.input.borderColor}`,
+    borderRadius: theme.shape.radius.default,
+    overflow: 'hidden',
+    cursor: 'text',
+    '&:hover': { borderColor: theme.components.input.borderHover },
+    '&:focus-within': {
+      borderColor: theme.colors.primary.border,
+      boxShadow: `0 0 0 1px ${theme.colors.primary.border}`,
+    },
   }),
 });

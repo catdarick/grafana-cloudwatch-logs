@@ -15,6 +15,9 @@ Requires **Grafana 10.4** or later.
 - Groups from different regions go out as separate queries and their rows are merged.
 - Tabs, favorites and saved queries are kept in the browser's `localStorage` (10.4 has no user storage API).
   Results live only in the tab's memory. Column settings (order, hidden, widths) are kept in the tab.
+- "Copy link" in the editor copies a link like `/a/gauss-cloudwatchlogs-app?query=…&group=<region>:<group>&from=now-30m&to=now&ds=<uid>`
+  (a relative range can be pinned to the last run). Opening it puts the query in a new tab
+  (or selects an identical one) and removes the params from the address. The query is not run automatically.
 - Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
   the whole log (the JSON in `@message`), not just the query's fields. `stats` queries and queries with `display` lack it,
   and the row's fields are shown instead.

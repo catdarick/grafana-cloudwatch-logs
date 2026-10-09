@@ -1,11 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
-import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
-import { DataSourcePicker, PluginPage, getDataSourceSrv } from '@grafana/runtime';
+import { AppEvents, AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
+import {
+  DataSourcePicker,
+  PluginPage,
+  config,
+  getAppEvents,
+  getDataSourceSrv,
+  locationService,
+} from '@grafana/runtime';
 import { Alert, Button, TimeZonePicker, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
+import { PLUGIN_BASE_URL } from '../../constants';
 import { AppSettings, QueryResult } from '../../types';
+import { SHARE_PARAM_KEYS, fromShareParams, toShareParams } from '../../utils/shareLink';
 import { formatTime, isValidRange, toEpochRange, zoneLabel } from '../../utils/timeRange';
 import { LogGroups } from '../LogGroups/LogGroups';
 import { QueryEditor } from '../QueryEditor/QueryEditor';
@@ -29,6 +38,20 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [runError, setRunError] = useState<Record<string, string | undefined>>({});
   const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
+
+  // A shared link opens its query in a tab once; the params are then dropped so a reload keeps the workspace.
+  useEffect(() => {
+    const shared = fromShareParams(new URLSearchParams(locationService.getLocation().search));
+    if (!shared) {
+      return;
+    }
+    ws.openShared(shared);
+    if (shared.datasourceUid && getDataSourceSrv().getInstanceSettings(shared.datasourceUid)) {
+      setDatasourceUid(shared.datasourceUid);
+    }
+    locationService.partial(Object.fromEntries(SHARE_PARAM_KEYS.map((k) => [k, null])), true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Autocomplete: fields CloudWatch has seen in the selected groups, plus fields from earlier results.
   useEffect(() => {
@@ -91,6 +114,24 @@ function App({ meta }: AppRootProps<AppSettings>) {
   };
 
   const result = results[tab.id];
+
+  const copyLink = (fixedTime: boolean) => {
+    // A fixed link pins what was last run in this tab, so the recipient sees the same rows.
+    const timeRange =
+      fixedTime && tab.timeRange.mode === 'relative'
+        ? {
+            mode: 'absolute' as const,
+            ...(result ? { from: result.from, to: result.to } : toEpochRange(tab.timeRange)),
+          }
+        : tab.timeRange;
+    const params = toShareParams({ query: tab.query, logGroups: tab.logGroups, timeRange, datasourceUid });
+    const url = `${window.location.origin}${config.appSubUrl}${PLUGIN_BASE_URL}?${params}`;
+    copyText(url).then(
+      () => getAppEvents().publish({ type: AppEvents.alertSuccess.name, payload: ['Link copied'] }),
+      () => getAppEvents().publish({ type: AppEvents.alertError.name, payload: ['Could not copy the link'] })
+    );
+  };
+
   const error = runError[tab.id] ?? result?.error;
 
   return (
@@ -147,6 +188,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
             onRun={run}
             onSave={ws.saveQuery}
             onDelete={ws.deleteQuery}
+            relativeTime={tab.timeRange.mode === 'relative'}
+            onCopyLink={copyLink}
           />
           <section className={s.timeColumn}>
             <h5 className={s.title}>Time range</h5>
@@ -201,6 +244,27 @@ function App({ meta }: AppRootProps<AppSettings>) {
 }
 
 export default App;
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    // No Clipboard API (plain-http Grafana) or permission denied: fall back to a hidden textarea.
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only option without the Clipboard API
+  const ok = document.execCommand('copy');
+  area.remove();
+  if (!ok) {
+    throw new Error('copy failed');
+  }
+}
 
 function isCancelled(e: unknown): boolean {
   return Boolean(e && typeof e === 'object' && 'cancelled' in e && (e as { cancelled?: boolean }).cancelled);

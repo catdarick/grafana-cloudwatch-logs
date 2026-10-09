@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LogGroupRef, PersistedState, QueryTab, SavedQuery } from '../types';
+import { SharedQuery, matchesTab } from '../utils/shareLink';
 import { DEFAULT_TIME_RANGE } from '../utils/timeRange';
 import { loadState, saveState } from './storage';
 
@@ -63,6 +64,23 @@ export function useWorkspace() {
     });
   }, []);
 
+  /** Opens a shared link: selects an identical tab if there is one, otherwise adds a new tab. */
+  const openShared = useCallback((shared: SharedQuery) => {
+    setState((s) => {
+      const existing = s.tabs.find((t) => matchesTab(t, shared));
+      if (existing) {
+        return { ...s, activeTabId: existing.id };
+      }
+      const tab = {
+        ...createTab(nextTabNumber(s.tabs)),
+        query: shared.query,
+        logGroups: shared.logGroups,
+        timeRange: shared.timeRange,
+      };
+      return { ...s, tabs: [...s.tabs, tab], activeTabId: tab.id };
+    });
+  }, []);
+
   const selectTab = useCallback((id: string) => setState((s) => ({ ...s, activeTabId: id })), []);
 
   const toggleFavorite = useCallback((group: LogGroupRef) => {
@@ -96,6 +114,7 @@ export function useWorkspace() {
     updateTab,
     addTab,
     closeTab,
+    openShared,
     selectTab,
     toggleFavorite,
     saveQuery,
