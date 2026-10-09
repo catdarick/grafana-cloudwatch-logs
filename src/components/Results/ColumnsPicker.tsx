@@ -27,9 +27,11 @@ export function ColumnsPicker({ fields, extra, rawKeys, rowCount, settings, onCh
   const measure = () => {
     const rect = anchorRef.current?.getBoundingClientRect();
     if (rect) {
-      // Minus the popup's own padding, arrow and a margin from the screen edge.
-      const room = Math.max(rect.top, window.innerHeight - rect.bottom) - 80;
-      setMaxHeight(Math.max(240, Math.min(560, room)));
+      // Grafana's top bar covers the top of the window, so room above starts below the page's
+      // scroll area. Minus the popup's own padding, arrow and a margin.
+      const top = scrollParentTop(anchorRef.current);
+      const room = Math.max(rect.top - top, window.innerHeight - rect.bottom) - 80;
+      setMaxHeight(Math.max(200, Math.min(560, room)));
     }
   };
   const needle = search.trim().toLowerCase();
@@ -127,6 +129,17 @@ export function ColumnsPicker({ fields, extra, rawKeys, rowCount, settings, onCh
       </Toggletip>
     </div>
   );
+}
+
+/** Top edge of the nearest scrolling ancestor: the part of the window the page actually shows. */
+function scrollParentTop(el: HTMLElement | null): number {
+  for (let node = el?.parentElement; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight) {
+      return Math.max(0, node.getBoundingClientRect().top);
+    }
+  }
+  return 0;
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
