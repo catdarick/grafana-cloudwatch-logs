@@ -1,6 +1,7 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { css } from '@emotion/css';
-import { GrafanaTheme2, SelectableValue } from '@grafana/data';
+import { css, cx } from '@emotion/css';
+import { AppEvents, GrafanaTheme2 } from '@grafana/data';
+import { getAppEvents } from '@grafana/runtime';
 import {
   Button,
   CodeEditor,
@@ -8,11 +9,13 @@ import {
   CodeEditorSuggestionItemKind,
   Dropdown,
   Field,
+  FilterInput,
+  Icon,
   IconButton,
   Input,
   Menu,
   Modal,
-  Select,
+  Toggletip,
   useStyles2,
 } from '@grafana/ui';
 import {
@@ -24,6 +27,8 @@ import {
   registerLogsInsights,
 } from '../../language/logsInsights';
 import { SavedQuery } from '../../types';
+
+const SAVE_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘S' : 'Ctrl+S';
 
 interface Props {
   query: string;
@@ -53,16 +58,39 @@ export function QueryEditor({
   onCopyLink,
 }: Props) {
   const s = useStyles2(getStyles);
-  const [saveOpen, setSaveOpen] = useState(false);
+  // Which dialog is open: save under a new name, or rename the current saved query.
+  const [dialog, setDialog] = useState<'saveAs' | 'rename'>();
   const [name, setName] = useState('');
+  const [listOpen, setListOpen] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const current = savedQueries.find((q) => q.name === savedQueryName);
+  const modified = current !== undefined && current.query !== query;
+
+  const openDialog = (kind: 'saveAs' | 'rename') => {
+    setName(kind === 'rename' ? (savedQueryName ?? '') : '');
+    setDialog(kind);
+  };
+
+  // Saves in place when the tab holds a saved query, otherwise asks for a name.
+  const save = () => {
+    if (current) {
+      onSave({ name: current.name, query });
+      getAppEvents().publish({ type: AppEvents.alertSuccess.name, payload: [`Saved "${current.name}"`] });
+    } else {
+      openDialog('saveAs');
+    }
+  };
 
   // Monaco keeps the callbacks it was mounted with, so read the latest values through refs.
   const onChangeRef = useRef((value: string) => onChange(value, savedQueryName));
   const runRef = useRef(onRun);
+  const saveRef = useRef(save);
   const fieldsRef = useRef(fields);
   useLayoutEffect(() => {
     onChangeRef.current = (value: string) => onChange(value, savedQueryName);
     runRef.current = onRun;
+    saveRef.current = save;
     fieldsRef.current = fields;
   });
 
@@ -77,30 +105,95 @@ export function QueryEditor({
     })),
   ];
 
-  const options: Array<SelectableValue<string>> = savedQueries.map((q) => ({ label: q.name, value: q.name }));
-  const current = savedQueries.find((q) => q.name === savedQueryName);
-  const modified = current !== undefined && current.query !== query;
-
-  const openSave = () => {
-    setName(savedQueryName ?? '');
-    setSaveOpen(true);
-  };
-
-  const confirmSave = () => {
+  const confirmDialog = () => {
     const trimmed = name.trim();
     if (!trimmed) {
       return;
     }
-    onSave({ name: trimmed, query });
+    if (dialog === 'rename' && current) {
+      onSave({ name: trimmed, query: current.query });
+      if (trimmed !== current.name) {
+        onDelete(current.name);
+      }
+    } else {
+      onSave({ name: trimmed, query });
+    }
     onChange(query, trimmed);
-    setSaveOpen(false);
+    setDialog(undefined);
   };
 
+  const remove = (target: string) => {
+    onDelete(target);
+    if (target === savedQueryName) {
+      onChange(query, undefined);
+    }
+  };
+
+  const needle = search.trim().toLowerCase();
+  const shown = needle
+    ? savedQueries.filter((q) => q.name.toLowerCase().includes(needle) || q.query.toLowerCase().includes(needle))
+    : savedQueries;
+
+  const savedList = (
+    <div className={s.list}>
+      <FilterInput placeholder="Search saved queries" value={search} onChange={setSearch} autoFocus />
+      <ul className={s.items}>
+        {shown.map((q) => (
+          <li key={q.name} className={cx(s.item, q.name === savedQueryName && s.itemActive)}>
+            <button
+              type="button"
+              className={s.itemButton}
+              onClick={() => {
+                onChange(q.query, q.name);
+                setListOpen(false);
+              }}
+            >
+              <span className={s.itemName}>{q.name}</span>
+              <span className={s.itemQuery}>{q.query.replace(/\s+/g, ' ')}</span>
+            </button>
+            <IconButton name="trash-alt" size="sm" tooltip="Delete saved query" onClick={() => remove(q.name)} />
+          </li>
+        ))}
+        {shown.length === 0 && (
+          <li className={s.empty}>
+            {savedQueries.length === 0 ? `No saved queries yet. Save one with ${SAVE_SHORTCUT}.` : 'Nothing found'}
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+
+  const actions = (
+    <Menu>
+      <Menu.Item label={current ? 'Save' : 'Save…'} icon="save" shortcut={SAVE_SHORTCUT} onClick={save} />
+      <Menu.Item label="Save as…" icon="copy" onClick={() => openDialog('saveAs')} />
+      {current && <Menu.Item label="Rename…" icon="edit" onClick={() => openDialog('rename')} />}
+      {current && <Menu.Item label="Delete" icon="trash-alt" destructive onClick={() => remove(current.name)} />}
+      {current && <Menu.Divider />}
+      {current && <Menu.Item label="Detach from saved query" icon="times" onClick={() => onChange(query, undefined)} />}
+    </Menu>
+  );
+
   return (
-    <section className={s.section}>
-      <div className={s.header}>
-        <h5 className={s.title}>Query editor</h5>
-        <div className={s.saved}>
+    <section className={s.frame}>
+      <div className={s.bar}>
+        <Toggletip
+          placement="bottom-start"
+          fitContent
+          closeButton={false}
+          show={listOpen}
+          onOpen={() => setListOpen(true)}
+          onClose={() => setListOpen(false)}
+          content={savedList}
+        >
+          <button type="button" className={s.picker} title="Saved queries">
+            <Icon name="file-alt" />
+            <span className={cx(s.pickerName, !current && s.untitled)}>{current?.name ?? 'Untitled query'}</span>
+            {modified && <span className={s.dot} title="Unsaved changes" />}
+            <Icon name="angle-down" />
+          </button>
+        </Toggletip>
+        <div className={s.barActions}>
           {relativeTime ? (
             <Dropdown
               placement="bottom-end"
@@ -121,37 +214,14 @@ export function QueryEditor({
                 </Menu>
               }
             >
-              <Button size="sm" variant="secondary" fill="text" icon="link">
-                Copy link
-              </Button>
+              <IconButton name="link" size="md" tooltip="Copy link to this query" />
             </Dropdown>
           ) : (
-            <Button size="sm" variant="secondary" fill="text" icon="link" onClick={() => onCopyLink(false)}>
-              Copy link
-            </Button>
+            <IconButton name="link" size="md" tooltip="Copy link to this query" onClick={() => onCopyLink(false)} />
           )}
-          <Select
-            width={32}
-            isClearable
-            placeholder="Saved queries"
-            options={options}
-            value={savedQueryName ?? null}
-            onChange={(v) => {
-              const picked = savedQueries.find((q) => q.name === v?.value);
-              onChange(picked ? picked.query : query, picked?.name);
-            }}
-          />
-          <IconButton name="save" tooltip={modified ? 'Save changes' : 'Save query'} onClick={openSave} />
-          {savedQueryName && (
-            <IconButton
-              name="trash-alt"
-              tooltip="Delete saved query"
-              onClick={() => {
-                onDelete(savedQueryName);
-                onChange(query, undefined);
-              }}
-            />
-          )}
+          <Dropdown placement="bottom-end" overlay={actions}>
+            <IconButton name="ellipsis-h" size="md" tooltip="Save, rename, delete" />
+          </Dropdown>
         </div>
       </div>
       <CodeEditor
@@ -166,24 +236,29 @@ export function QueryEditor({
         onBeforeEditorMount={registerLogsInsights}
         onEditorDidMount={(editor, monaco) => {
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
           editor.onDidChangeModelContent(() => onChangeRef.current(editor.getValue()));
         }}
       />
-      <Modal title="Save query" isOpen={saveOpen} onDismiss={() => setSaveOpen(false)}>
+      <Modal
+        title={dialog === 'rename' ? 'Rename saved query' : 'Save query'}
+        isOpen={dialog !== undefined}
+        onDismiss={() => setDialog(undefined)}
+      >
         <Field label="Name" description="Saving under an existing name overwrites it">
           <Input
             autoFocus
             value={name}
             onChange={(e) => setName(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === 'Enter' && confirmSave()}
+            onKeyDown={(e) => e.key === 'Enter' && confirmDialog()}
           />
         </Field>
         <Modal.ButtonRow>
-          <Button variant="secondary" fill="outline" onClick={() => setSaveOpen(false)}>
+          <Button variant="secondary" fill="outline" onClick={() => setDialog(undefined)}>
             Cancel
           </Button>
-          <Button onClick={confirmSave} disabled={!name.trim()}>
-            Save
+          <Button onClick={confirmDialog} disabled={!name.trim()}>
+            {dialog === 'rename' ? 'Rename' : 'Save'}
           </Button>
         </Modal.ButtonRow>
       </Modal>
@@ -192,25 +267,101 @@ export function QueryEditor({
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  section: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1), minWidth: 0 }),
-  header: css({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: theme.spacing(1) }),
-  title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
-  saved: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
-  // Monaco has no border of its own; frame it like a Grafana input so it reads as a text field.
+  // Monaco has no border of its own; the frame makes the editor and its bar read as one text field.
   // It fills the row, which is at least as tall as the time range panel next to it.
-  editor: css({
-    fontFamily: theme.typography.fontFamilyMonospace,
-    fontSize: theme.typography.bodySmall.fontSize,
-    flex: 1,
-    minHeight: 220,
+  frame: css({
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
     border: `1px solid ${theme.components.input.borderColor}`,
     borderRadius: theme.shape.radius.default,
     overflow: 'hidden',
-    cursor: 'text',
     '&:hover': { borderColor: theme.components.input.borderHover },
     '&:focus-within': {
       borderColor: theme.colors.primary.border,
       boxShadow: `0 0 0 1px ${theme.colors.primary.border}`,
     },
   }),
+  // Above the editor, whose layers would otherwise cover the saved queries popup.
+  bar: css({
+    position: 'relative',
+    zIndex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+    height: theme.spacing(4),
+    padding: theme.spacing(0, 0.5, 0, 0.5),
+    borderBottom: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+  }),
+  picker: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.75),
+    minWidth: 0,
+    height: theme.spacing(3),
+    padding: theme.spacing(0, 1),
+    border: 'none',
+    borderRadius: theme.shape.radius.default,
+    background: 'transparent',
+    color: theme.colors.text.primary,
+    cursor: 'pointer',
+    '&:hover': { background: theme.colors.action.hover },
+  }),
+  pickerName: css({
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
+  untitled: css({ color: theme.colors.text.secondary, fontWeight: theme.typography.fontWeightRegular }),
+  dot: css({ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: theme.colors.warning.main }),
+  barActions: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1), paddingRight: theme.spacing(0.5) }),
+  editor: css({
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.bodySmall.fontSize,
+    flex: 1,
+    minHeight: 220,
+    cursor: 'text',
+    position: 'relative',
+    zIndex: 0,
+  }),
+  list: css({ width: 420, display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
+  items: css({ listStyle: 'none', margin: 0, padding: 0, maxHeight: 320, overflowY: 'auto' }),
+  item: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    paddingRight: theme.spacing(0.5),
+    borderRadius: theme.shape.radius.default,
+    '&:hover': { background: theme.colors.action.hover },
+    '& > button:last-child': { visibility: 'hidden' },
+    '&:hover > button:last-child': { visibility: 'visible' },
+  }),
+  itemActive: css({ background: theme.colors.action.selected }),
+  itemButton: css({
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    padding: theme.spacing(0.5, 1),
+    border: 'none',
+    background: 'transparent',
+    color: theme.colors.text.primary,
+    textAlign: 'left',
+    cursor: 'pointer',
+  }),
+  itemName: css({ fontWeight: theme.typography.fontWeightMedium }),
+  itemQuery: css({
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.secondary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  empty: css({ padding: theme.spacing(1), color: theme.colors.text.secondary }),
 });
