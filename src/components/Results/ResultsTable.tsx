@@ -586,13 +586,16 @@ export function ResultsTable({
                     index === currentRow && s.current
                   )}
                 >
-                  <td className={s.expandCell}>
-                    <IconButton
-                      size="sm"
-                      name={isOpen ? 'angle-down' : 'angle-right'}
+                  <td className={s.expandCell} onClick={() => toggleIn(expanded, setExpanded, index)}>
+                    <button
+                      type="button"
+                      className={cx(s.expandButton, isOpen && s.expandOpen)}
                       aria-label="Toggle row details"
-                      onClick={() => toggleIn(expanded, setExpanded, index)}
-                    />
+                      aria-expanded={isOpen}
+                      title={isOpen ? 'Hide the log' : 'Show the whole log'}
+                    >
+                      <Icon name="angle-right" />
+                    </button>
                   </td>
                   {cols.map((f) => {
                     const value = row[f] ?? '';
@@ -794,7 +797,34 @@ const getStyles = (theme: GrafanaTheme2) => ({
     '& > td:hover > div:last-child': { visibility: 'visible' },
   }),
   odd: css({ '& > td': { background: theme.colors.background.secondary } }),
-  expandCell: css({ padding: `${theme.spacing(0.25, 0, 0, 0.5)} !important` }),
+  // The whole first cell toggles the row; the chevron sits in the middle of tall rows and turns
+  // down when the log is open.
+  expandCell: css({
+    padding: `${theme.spacing(0, 0, 0, 0.5)} !important`,
+    verticalAlign: 'middle !important',
+    cursor: 'pointer',
+  }),
+  expandButton: css({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    padding: 0,
+    border: `1px solid transparent`,
+    borderRadius: theme.shape.radius.default,
+    background: 'transparent',
+    color: theme.colors.text.secondary,
+    cursor: 'pointer',
+    transition: 'transform 0.15s ease, background 0.15s ease',
+    'tr:hover &': { color: theme.colors.text.primary, borderColor: theme.colors.border.medium },
+    '&:hover': { background: theme.colors.action.hover },
+  }),
+  expandOpen: css({
+    transform: 'rotate(90deg)',
+    color: `${theme.colors.primary.text} !important`,
+    borderColor: `${theme.colors.primary.border} !important`,
+  }),
   level: {
     none: css({}),
     info: css({}),
