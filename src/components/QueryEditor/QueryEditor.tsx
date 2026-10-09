@@ -157,7 +157,7 @@ export function QueryEditor({
       <CodeEditor
         language={LANGUAGE_ID}
         value={query}
-        height={220}
+        height="100%"
         showLineNumbers
         showMiniMap={false}
         containerStyles={s.editor}
@@ -197,10 +197,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
   title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
   saved: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
   // Monaco has no border of its own; frame it like a Grafana input so it reads as a text field.
+  // It fills the row, which is at least as tall as the time range panel next to it.
   editor: css({
     fontFamily: theme.typography.fontFamilyMonospace,
     fontSize: theme.typography.bodySmall.fontSize,
-    minHeight: 200,
+    flex: 1,
+    minHeight: 220,
     border: `1px solid ${theme.components.input.borderColor}`,
     borderRadius: theme.shape.radius.default,
     overflow: 'hidden',
