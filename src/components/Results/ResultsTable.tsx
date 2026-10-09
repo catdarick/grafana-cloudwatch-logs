@@ -3,9 +3,10 @@ import { css, cx } from '@emotion/css';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
-import { Button, Checkbox, ClipboardButton, Icon, IconButton, Input, useStyles2 } from '@grafana/ui';
+import { Button, Checkbox, ClipboardButton, Dropdown, Icon, IconButton, Input, Menu, useStyles2 } from '@grafana/ui';
 import { ColumnSettings, QueryResult } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
+import { downloadCsv, toCsv } from '../../utils/csv';
 import { formatTime } from '../../utils/timeRange';
 import {
   ValueFilters,
@@ -38,6 +39,8 @@ interface Props {
   onRunRange: (from: number, to: number) => void;
   /** Adds a Logs Insights clause to the tab's query and re-runs. */
   onAddQueryFilter: (clause: string) => void;
+  /** Used in exported file names, e.g. the tab title. */
+  exportName: string;
 }
 
 const EXPAND_WIDTH = 32;
@@ -68,7 +71,15 @@ function rowLevel(row: Record<string, string>, levelField?: string): Level {
   return undefined;
 }
 
-export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRunRange, onAddQueryFilter }: Props) {
+export function ResultsTable({
+  result,
+  timeZone,
+  columns,
+  onColumnsChange,
+  onRunRange,
+  onAddQueryFilter,
+  exportName,
+}: Props) {
   const s = useStyles2(getStyles);
   const [filters, setFilters] = useState<ValueFilters>({});
   // Time window picked on the histogram; narrows the loaded rows without a new query.
@@ -330,6 +341,26 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
     return highlight(value, index);
   };
 
+  const exportCsv = (what: 'shown' | 'all' | 'raw') => {
+    const fields = what === 'shown' ? cols : orderColumns(result.fields, columns);
+    const indexes = what === 'shown' ? rows : displayRows.map((_, i) => i);
+    const data = indexes.map((i) =>
+      what === 'raw'
+        ? {
+            ...displayRows[i],
+            '@message': result.details[i]?.message,
+            '@log': result.details[i]?.logGroup,
+            '@logStream': result.details[i]?.logStream,
+          }
+        : displayRows[i]
+    );
+    const header =
+      what === 'raw' ? [...fields.filter((f) => f !== '@message'), '@message', '@log', '@logStream'] : fields;
+    const stamp = formatTime(Date.now(), timeZone, 'YYYYMMDD-HHmmss');
+    const safeName = exportName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'logs';
+    downloadCsv(`${safeName}-${stamp}.csv`, toCsv(header, data));
+  };
+
   const filterCount = Object.keys(filters).length;
   const total = result.rows.length;
   const items = virtualizer.getVirtualItems();
@@ -431,6 +462,32 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
             Clear {filterCount === 1 ? 'filter' : `${filterCount} filters`}
           </Button>
         )}
+        <Dropdown
+          placement="bottom-end"
+          overlay={
+            <Menu>
+              <Menu.Item
+                label={`Shown rows, visible columns (${rows.length})`}
+                description="After filters, search and zoom, as on screen"
+                onClick={() => exportCsv('shown')}
+              />
+              <Menu.Item
+                label={`All loaded rows, all fields (${total})`}
+                description="Ignores filters, search, zoom and hidden columns"
+                onClick={() => exportCsv('all')}
+              />
+              <Menu.Item
+                label={`All loaded rows with raw log (${total})`}
+                description="All fields plus @message, @log and @logStream"
+                onClick={() => exportCsv('raw')}
+              />
+            </Menu>
+          }
+        >
+          <Button size="sm" variant="secondary" icon="download-alt">
+            Export CSV
+          </Button>
+        </Dropdown>
         <ColumnsPicker fields={result.fields} settings={columns} onChange={onColumnsChange} />
       </div>
 

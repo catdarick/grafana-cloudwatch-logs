@@ -294,6 +294,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
               onColumnsChange={(columns) => ws.updateTab(tab.id, { columns })}
               onRunRange={zoomTo}
               onAddQueryFilter={addQueryFilter}
+              exportName={tab.title}
             />
           </section>
         )}
