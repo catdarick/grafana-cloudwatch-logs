@@ -39,9 +39,14 @@ src/
 cp .env.example .env   # Grafana 10.4.19 for docker compose
 npm install
 npm run dev            # watch build into dist/
-export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_REGION=us-east-2
-npm run server         # Grafana 10.4.19 in docker at http://localhost:3000
+AWS_PROFILE=my-profile AWS_REGION=us-east-2 npm run server   # Grafana at http://localhost:3000
 ```
+
+AWS access comes from `~/.aws`: the folder is mounted into the container read-only, and the data source uses
+the default AWS SDK chain with the profile from `AWS_PROFILE` (`default` if unset). Static keys,
+`role_arn` + `source_profile` and SSO (run `aws sso login --profile my-profile` first) work. Profiles with `credential_process`
+will not work if the process is built for macOS: it runs inside a Linux container. Explicit
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` also work and take precedence over the profile.
 
 Checks: `npm run typecheck && npm run lint && npm run test:ci && npm run build`.
 

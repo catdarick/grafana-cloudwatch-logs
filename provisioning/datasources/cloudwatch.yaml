@@ -1,4 +1,5 @@
-# Local development only. Export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION before `npm run server`.
+# Local development only. Credentials come from the Grafana container's environment,
+# see docker-compose.yaml (~/.aws profile via AWS_PROFILE, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY).
 apiVersion: 1
 
 datasources:
@@ -6,8 +7,5 @@ datasources:
     type: cloudwatch
     uid: cloudwatch-dev
     jsonData:
-      authType: keys
+      authType: default
       defaultRegion: ${AWS_REGION}
-    secureJsonData:
-      accessKey: ${AWS_ACCESS_KEY_ID}
-      secretKey: ${AWS_SECRET_ACCESS_KEY}

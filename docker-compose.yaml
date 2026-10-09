@@ -3,7 +3,17 @@ services:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+    volumes:
+      # Your local AWS profiles (static keys, assume-role, SSO). Read-only.
+      - ${HOME}/.aws:/root/.aws:ro
     environment:
+      # The CloudWatch datasource uses the AWS SDK default chain:
+      # env keys if set, otherwise the profile below from ~/.aws/config and ~/.aws/credentials.
+      AWS_SDK_LOAD_CONFIG: '1'
+      AWS_CONFIG_FILE: /root/.aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_REGION: ${AWS_REGION:-us-east-2}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
