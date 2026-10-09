@@ -32,8 +32,8 @@ interface Props {
   timeZone: TimeZone;
   columns: ColumnSettings;
   onColumnsChange: (columns: ColumnSettings) => void;
-  /** Narrows the tab's time range and re-runs. */
-  onZoom: (from: number, to: number) => void;
+  /** Sets the tab's time range to the zoomed window and re-runs, for more than the loaded rows. */
+  onRunRange: (from: number, to: number) => void;
   /** Adds a Logs Insights clause to the tab's query and re-runs. */
   onAddQueryFilter: (clause: string) => void;
 }
@@ -66,9 +66,11 @@ function rowLevel(row: Record<string, string>, levelField?: string): Level {
   return undefined;
 }
 
-export function ResultsTable({ result, timeZone, columns, onColumnsChange, onZoom, onAddQueryFilter }: Props) {
+export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRunRange, onAddQueryFilter }: Props) {
   const s = useStyles2(getStyles);
   const [filters, setFilters] = useState<ValueFilters>({});
+  // Time window picked on the histogram; narrows the loaded rows without a new query.
+  const [zoom, setZoom] = useState<{ from: number; to: number }>();
   const [search, setSearch] = useState('');
   const [hideNonMatching, setHideNonMatching] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -120,9 +122,18 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onZoo
     return info;
   }, [displayRows, result.fields, result.timeFields]);
 
+  const inZoom = useMemo(
+    () =>
+      displayRows.map((_, i) => {
+        const time = result.details[i]?.timestamp;
+        return !zoom || (time !== undefined && time >= zoom.from && time <= zoom.to);
+      }),
+    [displayRows, result.details, zoom]
+  );
+
   const filtered = useMemo(
-    () => displayRows.flatMap((row, index) => (passesFilters(row, filters) ? [index] : [])),
-    [displayRows, filters]
+    () => displayRows.flatMap((row, index) => (inZoom[index] && passesFilters(row, filters) ? [index] : [])),
+    [displayRows, filters, inZoom]
   );
 
   // Search covers the visible columns, so every match has something to highlight.
@@ -141,8 +152,9 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onZoo
       const level = rowLevel(displayRows[i], levelField);
       return time === undefined ? [] : [{ time, group: level === 'info' || !level ? 'other' : level }];
     });
-    return points.length > 0 ? histogram(points, result.from, result.to) : undefined;
-  }, [rows, result, displayRows, levelField]);
+    const range = zoom ?? result;
+    return points.length > 0 || zoom ? histogram(points, range.from, range.to) : undefined;
+  }, [rows, result, displayRows, levelField, zoom]);
 
   // No React Compiler here anyway; the virtualizer is re-read on every render by design.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -340,7 +352,29 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onZoo
         <ColumnsPicker fields={result.fields} settings={columns} onChange={onColumnsChange} />
       </div>
 
-      {bins && <Histogram bins={bins} timeZone={timeZone} onZoom={onZoom} />}
+      {zoom && (
+        <div className={s.zoomBar}>
+          <Icon name="search-plus" />
+          <span>
+            Showing loaded logs from {formatTime(zoom.from, timeZone, 'YYYY-MM-DD HH:mm:ss')} to{' '}
+            {formatTime(zoom.to, timeZone, 'HH:mm:ss')}
+          </span>
+          <Button size="sm" variant="secondary" fill="text" icon="times" onClick={() => setZoom(undefined)}>
+            Reset zoom
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            fill="text"
+            icon="sync"
+            tooltip="Only loaded rows are shown. Run the query for this range to get everything in it."
+            onClick={() => onRunRange(zoom.from, zoom.to)}
+          >
+            Run for this range
+          </Button>
+        </div>
+      )}
+      {bins && <Histogram bins={bins} timeZone={timeZone} onZoom={(from, to) => setZoom({ from, to })} />}
 
       <div className={s.scroll} ref={scrollRef}>
         <table
@@ -365,7 +399,13 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onZoo
                     <ColumnMenu
                       field={f}
                       allowed={filters[f]}
-                      getValues={() => valueCounts(displayRows, f, filters)}
+                      getValues={() =>
+                        valueCounts(
+                          displayRows.filter((_, i) => inZoom[i]),
+                          f,
+                          filters
+                        )
+                      }
                       onChange={(allowed) => setFilter(f, allowed)}
                       onHide={() => hideColumn(f)}
                       onMove={(offset) => moveVisible(f, offset)}
@@ -534,6 +574,16 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: theme.colors.background.canvas,
   }),
   search: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1), marginRight: 'auto' }),
+  zoomBar: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    padding: theme.spacing(0.5, 1),
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.primary.transparent,
+    color: theme.colors.text.primary,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
   count: css({ color: theme.colors.text.secondary, whiteSpace: 'nowrap' }),
   // Own scroll area: keeps the header visible and lets only the rows on screen render.
   scroll: css({

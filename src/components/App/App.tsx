@@ -275,7 +275,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
               timeZone={ws.state.timeZone}
               columns={tab.columns ?? {}}
               onColumnsChange={(columns) => ws.updateTab(tab.id, { columns })}
-              onZoom={zoomTo}
+              onRunRange={zoomTo}
               onAddQueryFilter={addQueryFilter}
             />
           </section>

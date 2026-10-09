@@ -11,7 +11,7 @@ export const LEVEL_ORDER = ['error', 'warning', 'other', 'debug'] as const;
 interface Props {
   bins: Bin[];
   timeZone: TimeZone;
-  /** Drag across bars (or click one) to narrow the time range to them. */
+  /** Drag across bars (or click one) to zoom into them. */
   onZoom: (from: number, to: number) => void;
 }
 
@@ -20,6 +20,8 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
   const s = useStyles2(getStyles);
   const theme = useTheme2();
   const [drag, setDrag] = useState<{ start: number; end: number }>();
+  // Our own tooltip: the native title one only appears after a delay.
+  const [hover, setHover] = useState<number>();
   const max = Math.max(1, ...bins.map((b) => b.total));
   const colors: Record<string, string> = {
     error: theme.colors.error.main,
@@ -42,17 +44,28 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
 
   return (
     <div className={s.wrapper}>
-      <div className={s.bars} onMouseLeave={() => setDrag(undefined)} onMouseUp={finish}>
+      <div
+        className={s.bars}
+        onMouseLeave={() => {
+          setDrag(undefined);
+          setHover(undefined);
+        }}
+        onMouseUp={finish}
+      >
         {bins.map((bin, i) => (
           <div
             key={i}
             className={cx(s.slot, inDrag(i) && s.selected)}
-            title={tooltip(bin, timeZone)}
             onMouseDown={(e) => {
               e.preventDefault();
               setDrag({ start: i, end: i });
             }}
-            onMouseEnter={() => drag && setDrag({ ...drag, end: i })}
+            onMouseEnter={() => {
+              setHover(i);
+              if (drag) {
+                setDrag({ ...drag, end: i });
+              }
+            }}
           >
             <div className={s.stack} style={{ height: `${(bin.total / max) * 100}%` }}>
               {LEVEL_ORDER.map((level) =>
@@ -68,6 +81,34 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
           </div>
         ))}
       </div>
+      {hover !== undefined && bins[hover] && (
+        <div
+          className={s.tooltip}
+          style={{
+            left: `${((hover + 0.5) / bins.length) * 100}%`,
+            transform: `translateX(${hover < bins.length / 2 ? '-20%' : '-80%'})`,
+          }}
+        >
+          <div className={s.tooltipTime}>
+            {drag && drag.start !== drag.end
+              ? `${formatTime(bins[Math.min(drag.start, drag.end)].start, timeZone, 'HH:mm:ss')} – ${formatTime(
+                  bins[Math.max(drag.start, drag.end)].end,
+                  timeZone,
+                  'HH:mm:ss'
+                )}`
+              : `${formatTime(bins[hover].start, timeZone, 'HH:mm:ss')} – ${formatTime(bins[hover].end, timeZone, 'HH:mm:ss')}`}
+          </div>
+          <div className={s.tooltipTotal}>{bins[hover].total} logs</div>
+          {LEVEL_ORDER.filter((l) => bins[hover].counts[l]).map((l) => (
+            <div key={l} className={s.tooltipRow}>
+              <span className={s.swatch} style={{ background: colors[l] }} />
+              <span>{l === 'other' ? 'info / other' : l}</span>
+              <span className={s.tooltipCount}>{bins[hover].counts[l]}</span>
+            </div>
+          ))}
+          <div className={s.tooltipHint}>Click or drag to zoom</div>
+        </div>
+      )}
       {bins.length > 0 && (
         <div className={s.axis}>
           <span>{formatTime(bins[0].start, timeZone, format)}</span>
@@ -79,16 +120,34 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
   );
 }
 
-function tooltip(bin: Bin, timeZone: TimeZone): string {
-  const range = `${formatTime(bin.start, timeZone, 'HH:mm:ss')} – ${formatTime(bin.end, timeZone, 'HH:mm:ss')}`;
-  const levels = LEVEL_ORDER.filter((l) => bin.counts[l])
-    .map((l) => `${bin.counts[l]} ${l === 'other' ? 'info/other' : l}`)
-    .join(', ');
-  return `${range}\n${bin.total} logs${levels ? ` (${levels})` : ''}\nClick or drag to zoom in`;
-}
-
 const getStyles = (theme: GrafanaTheme2) => ({
-  wrapper: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), userSelect: 'none' }),
+  wrapper: css({
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.5),
+    userSelect: 'none',
+  }),
+  tooltip: css({
+    position: 'absolute',
+    bottom: 'calc(100% - 4px)',
+    zIndex: 4,
+    minWidth: 160,
+    padding: theme.spacing(1),
+    borderRadius: theme.shape.radius.default,
+    border: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.primary,
+    boxShadow: theme.shadows.z3,
+    fontSize: theme.typography.bodySmall.fontSize,
+    pointerEvents: 'none',
+    fontVariantNumeric: 'tabular-nums',
+  }),
+  tooltipTime: css({ color: theme.colors.text.secondary }),
+  tooltipTotal: css({ fontWeight: theme.typography.fontWeightMedium, marginBottom: theme.spacing(0.5) }),
+  tooltipRow: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.75) }),
+  swatch: css({ width: 8, height: 8, borderRadius: 2 }),
+  tooltipCount: css({ marginLeft: 'auto', paddingLeft: theme.spacing(2) }),
+  tooltipHint: css({ marginTop: theme.spacing(0.5), color: theme.colors.text.disabled }),
   bars: css({
     display: 'flex',
     alignItems: 'flex-end',
