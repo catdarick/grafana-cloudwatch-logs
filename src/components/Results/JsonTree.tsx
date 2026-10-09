@@ -1,27 +1,33 @@
 import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { IconButton, useStyles2 } from '@grafana/ui';
+import { Dropdown, IconButton, Menu, useStyles2 } from '@grafana/ui';
 import { copyWithToast } from '../../utils/clipboard';
 
 interface Props {
   value: unknown;
+  /** Whether the table can filter on this path (a column or a field of the raw log). */
+  canFilterTable: (path: string) => boolean;
+  /** Narrows the loaded rows, like the cell actions; no new query. */
+  onTableFilter: (path: string, value: unknown, exclude: boolean) => void;
   /** Adds `filter path = value` (or `!=`) to the query and runs it. */
-  onFilter: (path: string, value: unknown, negate: boolean) => void;
+  onQueryFilter: (path: string, value: unknown, negate: boolean) => void;
 }
+
+type Actions = Omit<Props, 'value'>;
 
 const OPEN_DEPTH = 2;
 
 /** Collapsible, highlighted JSON with filter and copy actions on every value. */
-export function JsonTree({ value, onFilter }: Props) {
+export function JsonTree({ value, ...actions }: Props) {
   const s = useStyles2(getStyles);
   if (!isContainer(value)) {
-    return <Leaf name="" path="" value={value} onFilter={onFilter} />;
+    return <Leaf name="" path="" value={value} actions={actions} />;
   }
   return (
     <div className={s.tree}>
       {entries(value).map(([key, child]) => (
-        <Node key={key} name={key} path={key} value={child} depth={0} onFilter={onFilter} />
+        <Node key={key} name={key} path={key} value={child} depth={0} actions={actions} />
       ))}
     </div>
   );
@@ -32,14 +38,14 @@ interface NodeProps {
   path: string;
   value: unknown;
   depth: number;
-  onFilter: Props['onFilter'];
+  actions: Actions;
 }
 
-function Node({ name, path, value, depth, onFilter }: NodeProps) {
+function Node({ name, path, value, depth, actions }: NodeProps) {
   const s = useStyles2(getStyles);
   const [open, setOpen] = useState(depth < OPEN_DEPTH);
   if (!isContainer(value)) {
-    return <Leaf name={name} path={path} value={value} onFilter={onFilter} />;
+    return <Leaf name={name} path={path} value={value} actions={actions} />;
   }
   const children = entries(value);
   const brackets = Array.isArray(value) ? ['[', ']'] : ['{', '}'];
@@ -62,7 +68,7 @@ function Node({ name, path, value, depth, onFilter }: NodeProps) {
               path={path ? `${path}.${key}` : key}
               value={child}
               depth={depth + 1}
-              onFilter={onFilter}
+              actions={actions}
             />
           ))}
         </div>
@@ -71,10 +77,11 @@ function Node({ name, path, value, depth, onFilter }: NodeProps) {
   );
 }
 
-function Leaf({ name, path, value, onFilter }: Omit<NodeProps, 'depth'>) {
+function Leaf({ name, path, value, actions }: Omit<NodeProps, 'depth'>) {
   const s = useStyles2(getStyles);
   const text = value === null ? 'null' : typeof value === 'string' ? JSON.stringify(value) : String(value);
   const kind = value === null ? 'null' : typeof value;
+  const inTable = path !== '' && actions.canFilterTable(path);
   return (
     <div className={cx(s.line, s.leaf)}>
       <span className={s.caret} />
@@ -82,24 +89,49 @@ function Leaf({ name, path, value, onFilter }: Omit<NodeProps, 'depth'>) {
       <span className={cx(s.value, s.kinds[kind as keyof typeof s.kinds])}>{text}</span>
       {path && (
         <span className={s.actions}>
-          <IconButton
-            name="search-plus"
-            size="sm"
-            tooltip={`Add filter ${path} = value to the query and run`}
-            onClick={() => onFilter(path, value, false)}
-          />
-          <IconButton
-            name="search-minus"
-            size="sm"
-            tooltip={`Add filter ${path} != value to the query and run`}
-            onClick={() => onFilter(path, value, true)}
-          />
+          {inTable && (
+            <>
+              <IconButton
+                name="search-plus"
+                size="sm"
+                tooltip="Show only this value in the table"
+                onClick={() => actions.onTableFilter(path, value, false)}
+              />
+              <IconButton
+                name="search-minus"
+                size="sm"
+                tooltip="Hide this value in the table"
+                onClick={() => actions.onTableFilter(path, value, true)}
+              />
+            </>
+          )}
           <IconButton
             name="copy"
             size="sm"
             tooltip="Copy value"
             onClick={() => copyWithToast(typeof value === 'string' ? value : text)}
           />
+          <Dropdown
+            placement="bottom-end"
+            overlay={
+              <Menu>
+                <Menu.Item
+                  label={`Query: filter ${path} = value`}
+                  description="Adds the clause to the query and runs it"
+                  icon="plus-circle"
+                  onClick={() => actions.onQueryFilter(path, value, false)}
+                />
+                <Menu.Item
+                  label={`Query: filter ${path} != value`}
+                  description="Adds the clause to the query and runs it"
+                  icon="minus-circle"
+                  onClick={() => actions.onQueryFilter(path, value, true)}
+                />
+              </Menu>
+            }
+          >
+            <IconButton name="ellipsis-h" size="sm" tooltip="Use in the query" />
+          </Dropdown>
         </span>
       )}
     </div>

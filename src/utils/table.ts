@@ -265,3 +265,34 @@ export function unloadedRange(
   const newest = Math.max(...times);
   return newest < to ? { from: newest, to, count: missing } : undefined;
 }
+
+/**
+ * Leaf values of a JSON log event by dotted path, the way Logs Insights names discovered fields
+ * (kubernetes.pod_name, items.0.id). Values are strings as they would show in a table cell.
+ */
+export function flattenJson(value: unknown, prefix = '', out: Record<string, string> = {}): Record<string, string> {
+  if (value !== null && typeof value === 'object') {
+    const entries = Array.isArray(value) ? value.map((v, i) => [String(i), v] as const) : Object.entries(value);
+    for (const [key, child] of entries) {
+      flattenJson(child, prefix ? `${prefix}.${key}` : key, out);
+    }
+    return out;
+  }
+  if (prefix && value !== null && value !== undefined && value !== '') {
+    out[prefix] = String(value);
+  }
+  return out;
+}
+
+/** flattenJson of a raw @message when it is a JSON object, else nothing. */
+export function flattenMessage(message: string | undefined): Record<string, string> {
+  const trimmed = message?.trim();
+  if (!trimmed?.startsWith('{')) {
+    return {};
+  }
+  try {
+    return flattenJson(JSON.parse(trimmed));
+  } catch {
+    return {};
+  }
+}

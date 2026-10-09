@@ -43,6 +43,8 @@ export interface LogDetails {
 
 /** Table layout per tab, keyed by field name so it survives re-running the query. */
 export interface ColumnSettings {
+  /** Fields taken from the raw JSON log (@message) and shown as extra columns. */
+  extra?: string[];
   order?: string[];
   hidden?: string[];
   widths?: Record<string, number>;

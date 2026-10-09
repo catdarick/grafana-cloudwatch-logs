@@ -21,7 +21,10 @@ Requires **Grafana 10.4** or later.
 - Grafana sorts log rows by time ascending and loses the query's `sort`; the plugin re-applies
   the query's last `sort` to the returned rows (including rows merged from several regions).
 - The histogram above the table is built from the loaded rows (free); selecting or clicking bars narrows
-  the loaded rows without a new query. "Run for this range" runs the query for that range. The +/− actions in the expanded JSON add a `filter` to the query and re-run it.
+  the loaded rows without a new query. "Run for this range" runs the query for that range.
+- Fields of the raw JSON log (`@message`, nested ones as `kubernetes.pod_name`) can be added as columns via Columns →
+  "Add from raw log", without a new query. In the expanded log, 🔍+/🔍− filter the table (the field becomes a column),
+  and "⋯" adds a `filter` to the query and re-runs it.
 - "Export CSV" above the table opens one dialog: which rows (shown or all loaded; only asked when filters,
   search or zoom hide some), which columns (the visible ones by default) and which parts of the raw log (`@message`,
   `@log`, `@logStream`). Times in the selected zone, UTF-8 with a BOM.

@@ -11,6 +11,7 @@ import { formatTime } from '../../utils/timeRange';
 import {
   ValueFilters,
   estimateWidth,
+  flattenMessage,
   fullLog,
   histogram,
   isMonoColumn,
@@ -109,10 +110,32 @@ export function ResultsTable({
   }, []);
 
   // Time fields arrive as epoch millis; show them in the selected zone.
+  // Leaves of each JSON log event by dotted path: candidates for extra columns and table filters.
+  const rawFlat = useMemo(() => result.details.map((d) => flattenMessage(d.message)), [result.details]);
+  const rawKeys = useMemo(() => {
+    const counts = new Map<string, number>();
+    rawFlat.forEach((row) => Object.keys(row).forEach((k) => counts.set(k, (counts.get(k) ?? 0) + 1)));
+    return Array.from(counts, ([name, count]) => ({ name, count }))
+      .filter((k) => !result.fields.includes(k.name))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [rawFlat, result.fields]);
+
+  // Query fields plus the ones added from the raw log.
+  const extra = useMemo(
+    () => (columns.extra ?? []).filter((f) => !result.fields.includes(f)),
+    [columns.extra, result.fields]
+  );
+  const fields = useMemo(() => [...result.fields, ...extra], [result.fields, extra]);
+
   const displayRows = useMemo(
     () =>
-      result.rows.map((row) => {
+      result.rows.map((row, i) => {
         const out = { ...row };
+        for (const f of extra) {
+          if (rawFlat[i][f] !== undefined) {
+            out[f] = rawFlat[i][f];
+          }
+        }
         for (const f of result.timeFields) {
           if (out[f] !== undefined) {
             out[f] = formatTime(Number(out[f]), timeZone, 'YYYY-MM-DD HH:mm:ss.SSS');
@@ -120,22 +143,22 @@ export function ResultsTable({
         }
         return out;
       }),
-    [result, timeZone]
+    [result, timeZone, extra, rawFlat]
   );
 
-  const cols = useMemo(() => visibleColumns(result.fields, columns), [result.fields, columns]);
+  const cols = useMemo(() => visibleColumns(fields, columns), [fields, columns]);
   const needle = search.trim().toLowerCase();
-  const levelField = result.fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
+  const levelField = fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
 
   // Per column: starting width from content, and whether it holds ids/numbers/times.
   const columnInfo = useMemo(() => {
     const info: Record<string, { width: number; mono: boolean }> = {};
-    for (const f of result.fields) {
+    for (const f of fields) {
       const values = displayRows.map((r) => r[f] ?? '');
       info[f] = { width: estimateWidth(f, values), mono: result.timeFields.includes(f) || isMonoColumn(values) };
     }
     return info;
-  }, [displayRows, result.fields, result.timeFields]);
+  }, [displayRows, fields, result.timeFields]);
 
   const inZoom = useMemo(
     () =>
@@ -265,9 +288,22 @@ export function ResultsTable({
       setFilter(field, new Set([value]));
       return;
     }
-    const allowed = new Set(filters[field] ?? displayRows.map((r) => r[field] ?? ''));
+    // The field may have just been added from the raw log and not be in displayRows yet.
+    const allowed = new Set(filters[field] ?? displayRows.map((r, i) => r[field] ?? rawFlat[i][field] ?? ''));
     allowed.delete(value);
     setFilter(field, allowed);
+  };
+
+  // A JSON value filters the table like a cell does; its field becomes a column so the filter shows.
+  const filterByLogValue = (path: string, value: unknown, exclude: boolean) => {
+    if (!fields.includes(path) || columns.hidden?.includes(path)) {
+      onColumnsChange({
+        ...columns,
+        extra: fields.includes(path) ? columns.extra : [...extra, path],
+        hidden: (columns.hidden ?? []).filter((f) => f !== path),
+      });
+    }
+    filterValue(path, value === null || value === undefined ? '' : String(value), exclude);
   };
 
   const toggleIn = (set: Set<number>, update: (s: Set<number>) => void, index: number) => {
@@ -315,7 +351,7 @@ export function ResultsTable({
   const hideColumn = (field: string) => onColumnsChange({ ...columns, hidden: [...(columns.hidden ?? []), field] });
   const moveVisible = (field: string, offset: number) => {
     // Move past hidden neighbours too, so one click always changes what is on screen.
-    const order = orderColumns(result.fields, columns);
+    const order = orderColumns(fields, columns);
     const target = cols[cols.indexOf(field) + offset];
     if (target) {
       onColumnsChange({ ...columns, order: moveColumn(order, field, order.indexOf(target) - order.indexOf(field)) });
@@ -467,13 +503,20 @@ export function ResultsTable({
           <ExportDialog
             shownCount={rows.length}
             totalCount={total}
-            allFields={orderColumns(result.fields, columns)}
+            allFields={orderColumns(fields, columns)}
             visibleFields={cols}
             onExport={exportCsv}
             onDismiss={() => setExporting(false)}
           />
         )}
-        <ColumnsPicker fields={result.fields} settings={columns} onChange={onColumnsChange} />
+        <ColumnsPicker
+          fields={fields}
+          extra={extra}
+          rawKeys={rawKeys}
+          rowCount={total}
+          settings={columns}
+          onChange={onColumnsChange}
+        />
       </div>
 
       <div className={s.scroll} ref={scrollRef}>
@@ -601,7 +644,9 @@ export function ResultsTable({
                         log={fullLog(row, details)}
                         logGroup={details?.logGroup}
                         logStream={details?.logStream}
-                        onFilter={(path, value, negate) => onAddQueryFilter(queryFilter(path, value, negate))}
+                        canFilterTable={(path) => fields.includes(path) || rawKeys.some((k) => k.name === path)}
+                        onTableFilter={(path, value, exclude) => filterByLogValue(path, value, exclude)}
+                        onQueryFilter={(path, value, negate) => onAddQueryFilter(queryFilter(path, value, negate))}
                       />
                     </td>
                   </tr>
@@ -640,10 +685,20 @@ interface LogDetailsProps {
   log: unknown;
   logGroup?: string;
   logStream?: string;
-  onFilter: (path: string, value: unknown, negate: boolean) => void;
+  canFilterTable: (path: string) => boolean;
+  onTableFilter: (path: string, value: unknown, exclude: boolean) => void;
+  onQueryFilter: (path: string, value: unknown, negate: boolean) => void;
 }
 
-function LogDetailsView({ width, log, logGroup, logStream, onFilter }: LogDetailsProps) {
+function LogDetailsView({
+  width,
+  log,
+  logGroup,
+  logStream,
+  canFilterTable,
+  onTableFilter,
+  onQueryFilter,
+}: LogDetailsProps) {
   const s = useStyles2(getStyles);
   const json = useMemo(() => JSON.stringify(log, null, 2), [log]);
   return (
@@ -654,7 +709,12 @@ function LogDetailsView({ width, log, logGroup, logStream, onFilter }: LogDetail
           Copy JSON
         </ClipboardButton>
       </div>
-      <JsonTree value={log} onFilter={onFilter} />
+      <JsonTree
+        value={log}
+        canFilterTable={canFilterTable}
+        onTableFilter={onTableFilter}
+        onQueryFilter={onQueryFilter}
+      />
     </div>
   );
 }

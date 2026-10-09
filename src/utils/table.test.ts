@@ -2,6 +2,8 @@ import {
   Row,
   addQueryStage,
   estimateWidth,
+  flattenJson,
+  flattenMessage,
   fullLog,
   histogram,
   isMonoColumn,
@@ -148,5 +150,22 @@ describe('unloadedRange', () => {
   it('knows nothing when everything was loaded or rows are sorted by something else', () => {
     expect(unloadedRange([10, 20], 0, 100, desc, 2)).toBeUndefined();
     expect(unloadedRange([10, 20], 0, 100, [{ field: 'n', desc: true }], 50)).toBeUndefined();
+  });
+});
+
+describe('flattenJson', () => {
+  it('names nested leaves by dotted path and skips empty values', () => {
+    expect(flattenJson({ a: 1, b: { c: 'x', d: null }, items: [{ id: 7 }, true], e: '' })).toEqual({
+      a: '1',
+      'b.c': 'x',
+      'items.0.id': '7',
+      'items.1': 'true',
+    });
+  });
+
+  it('reads only JSON object messages', () => {
+    expect(flattenMessage('{"level":"info"}')).toEqual({ level: 'info' });
+    expect(flattenMessage('plain text')).toEqual({});
+    expect(flattenMessage('{broken')).toEqual({});
   });
 });
