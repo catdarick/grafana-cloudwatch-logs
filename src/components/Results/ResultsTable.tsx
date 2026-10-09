@@ -148,21 +148,41 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
   const rows = needle && hideNonMatching ? matches : filtered;
   const currentRow = matches.length > 0 ? matches[Math.min(current, matches.length - 1)] : undefined;
 
-  const bins = useMemo(() => {
-    const points = rows.flatMap((i) => {
-      const time = result.details[i]?.timestamp;
-      const level = rowLevel(displayRows[i], levelField);
-      return time === undefined ? [] : [{ time, group: level === 'info' || !level ? 'other' : level }];
-    });
-    const range = zoom ?? result;
-    return points.length > 0 || zoom ? histogram(points, range.from, range.to) : undefined;
-  }, [rows, result, displayRows, levelField, zoom]);
-
   // Rows cut off by the limit: where they are on the time axis (when we can tell) and how many.
   const unloaded = useMemo(() => {
     const times = result.details.flatMap((d) => (d.timestamp === undefined ? [] : [d.timestamp]));
     return unloadedRange(times, result.from, result.to, parseSort(result.query ?? ''), result.stats?.recordsMatched);
   }, [result]);
+
+  // The axis (query range or zoom), the hatched part of it, and bins over the rest, so the last bar
+  // ends exactly where the hatching starts.
+  const histo = useMemo(() => {
+    const view = zoom ?? { from: result.from, to: result.to };
+    const from = unloaded ? Math.max(unloaded.from, view.from) : 0;
+    const to = unloaded ? Math.min(unloaded.to, view.to) : 0;
+    const gap =
+      unloaded && to > from
+        ? { from, to, count: unloaded.count, whole: unloaded.from >= view.from && unloaded.to <= view.to }
+        : undefined;
+    const loaded = !gap
+      ? view
+      : gap.from <= view.from
+        ? { from: gap.to, to: view.to }
+        : { from: view.from, to: gap.from };
+    const points = rows.flatMap((i) => {
+      const time = result.details[i]?.timestamp;
+      const level = rowLevel(displayRows[i], levelField);
+      return time === undefined ? [] : [{ time, group: level === 'info' || !level ? 'other' : level }];
+    });
+    if (points.length === 0 && !zoom) {
+      return undefined;
+    }
+    // Keep bars about as wide as on a full axis when they only cover part of it.
+    const share = (loaded.to - loaded.from) / Math.max(1, view.to - view.from);
+    const count = Math.max(1, Math.min(60, Math.round(60 * share)));
+    return { view, gap, bins: loaded.to > loaded.from ? histogram(points, loaded.from, loaded.to, count) : [] };
+  }, [rows, result, displayRows, levelField, zoom, unloaded]);
+
   const matched = result.stats?.recordsMatched;
   const caption =
     matched !== undefined && matched > result.rows.length
@@ -387,12 +407,13 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
           </Button>
         </div>
       )}
-      {bins && (
+      {histo && (
         <Histogram
-          bins={bins}
+          view={histo.view}
+          bins={histo.bins}
+          gap={histo.gap}
           timeZone={timeZone}
           onZoom={(from, to) => setZoom({ from, to })}
-          unloaded={unloaded}
           caption={caption}
           onRunRange={onRunRange}
         />

@@ -3,18 +3,32 @@ import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
 import { useStyles2, useTheme2 } from '@grafana/ui';
-import { Bin, Unloaded } from '../../utils/table';
+import { Bin } from '../../utils/table';
 import { formatTime } from '../../utils/timeRange';
+
+const MIN_BARS = 3;
 
 export const LEVEL_ORDER = ['error', 'warning', 'other', 'debug'] as const;
 
+export interface Gap {
+  from: number;
+  to: number;
+  /** Logs that did not fit the limit; all of them are somewhere in the full unloaded range. */
+  count: number;
+  /** False when zoom shows only part of the unloaded range, so the count is not all in view. */
+  whole: boolean;
+}
+
 interface Props {
+  /** The time axis shown: the query range, or the zoom window. */
+  view: { from: number; to: number };
+  /** Bins over the loaded part of the view; they end exactly where the gap starts (or the reverse). */
   bins: Bin[];
   timeZone: TimeZone;
   /** Drag across bars (or click one) to zoom into them. */
   onZoom: (from: number, to: number) => void;
-  /** Part of the range whose logs did not fit the limit, drawn hatched. */
-  unloaded?: Unloaded;
+  /** Part of the view whose logs did not fit the limit, drawn hatched. */
+  gap?: Gap;
   /** e.g. "300 of 27,177 matched logs", shown when the bars do not cover everything. */
   caption?: string;
   /** Clicking the hatched part runs the query for just that range. */
@@ -22,7 +36,7 @@ interface Props {
 }
 
 /** Logs over time for the loaded rows, stacked by level. */
-export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRange }: Props) {
+export function Histogram({ view, bins, timeZone, onZoom, gap, caption, onRunRange }: Props) {
   const s = useStyles2(getStyles);
   const theme = useTheme2();
   const [drag, setDrag] = useState<{ start: number; end: number }>();
@@ -36,14 +50,21 @@ export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRang
     other: theme.colors.primary.main,
     debug: theme.colors.text.disabled,
   };
-  const start = bins.length ? bins[0].start : 0;
-  const span = bins.length ? bins[bins.length - 1].end - start : 0;
-  // The hatched part, clipped to what the bars show (zoom can cut it) and snapped to bar edges so
-  // it never covers the bar holding the last loaded log.
-  const gap = unloaded && span > 0 ? snapGap(unloaded, bins, start, start + span) : undefined;
-  const showGap = gap && gap.to > gap.from;
+  const span = Math.max(1, view.to - view.from);
   const format = span > 2 * 86400000 ? 'MM-DD HH:mm' : span > 3600000 ? 'HH:mm' : 'HH:mm:ss';
   const inDrag = (i: number) => drag && i >= Math.min(drag.start, drag.end) && i <= Math.max(drag.start, drag.end);
+  const barsFrom = bins.length ? bins[0].start : view.from;
+  const barsTo = bins.length ? bins[bins.length - 1].end : view.from;
+  // Layout in % of the track. A few loaded seconds on a long axis would be a 1px sliver, so the bars
+  // get at least MIN_BARS% and the hatching gives way; the times in tooltips stay exact.
+  let barsShare = ((barsTo - barsFrom) / span) * 100;
+  if (gap && bins.length) {
+    barsShare = Math.max(barsShare, MIN_BARS);
+  }
+  const gapFirst = gap !== undefined && gap.from <= view.from;
+  const barsLeft = gapFirst ? 100 - barsShare : ((barsFrom - view.from) / span) * 100;
+  const gapLeft = gapFirst ? 0 : barsLeft + barsShare;
+  const gapWidth = gap ? (gapFirst ? 100 - barsShare : 100 - gapLeft) : 0;
 
   const finish = () => {
     if (drag) {
@@ -54,136 +75,107 @@ export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRang
     setDrag(undefined);
   };
 
+  const hovered = hover !== undefined ? bins[hover] : undefined;
+  const range = (a: number, b: number) =>
+    `${formatTime(a, timeZone, 'HH:mm:ss')} – ${formatTime(b, timeZone, 'HH:mm:ss')}`;
+
   return (
     <div className={s.wrapper}>
-      <div
-        className={s.bars}
-        onMouseLeave={() => {
-          setDrag(undefined);
-          setHover(undefined);
-        }}
-        onMouseUp={finish}
-      >
-        {showGap && unloaded && (
+      <div className={s.track}>
+        <div
+          className={s.bars}
+          style={{ left: `${barsLeft}%`, width: `${barsShare}%` }}
+          onMouseLeave={() => {
+            setDrag(undefined);
+            setHover(undefined);
+          }}
+          onMouseUp={finish}
+        >
+          {bins.map((bin, i) => (
+            <div
+              key={i}
+              className={cx(s.slot, inDrag(i) && s.selected)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setDrag({ start: i, end: i });
+              }}
+              onMouseEnter={() => {
+                setHover(i);
+                if (drag) {
+                  setDrag({ ...drag, end: i });
+                }
+              }}
+            >
+              <div className={s.stack} style={{ height: `${(bin.total / max) * 100}%` }}>
+                {LEVEL_ORDER.map((level) =>
+                  bin.counts[level] ? (
+                    <div
+                      key={level}
+                      style={{ flexGrow: bin.counts[level], background: colors[level] }}
+                      className={s.segment}
+                    />
+                  ) : null
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        {gap && (
           <div
             className={s.gap}
-            style={{ left: `${((gap.from - start) / span) * 100}%`, width: `${((gap.to - gap.from) / span) * 100}%` }}
-            onMouseEnter={() => {
-              setHover(undefined);
-              setHoverGap(true);
-            }}
+            style={{ left: `${gapLeft}%`, width: `${gapWidth}%` }}
+            onMouseEnter={() => setHoverGap(true)}
             onMouseLeave={() => setHoverGap(false)}
-            onMouseDown={(e) => e.stopPropagation()}
-            onMouseUp={(e) => e.stopPropagation()}
-            onClick={() => onRunRange(gap.rawFrom, gap.rawTo)}
+            onClick={() => onRunRange(gap.from, gap.to)}
           />
         )}
-        {bins.map((bin, i) => (
-          <div
-            key={i}
-            className={cx(s.slot, inDrag(i) && s.selected)}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              setDrag({ start: i, end: i });
-            }}
-            onMouseEnter={() => {
-              setHover(i);
-              if (drag) {
-                setDrag({ ...drag, end: i });
-              }
-            }}
-          >
-            <div className={s.stack} style={{ height: `${(bin.total / max) * 100}%` }}>
-              {LEVEL_ORDER.map((level) =>
-                bin.counts[level] ? (
-                  <div
-                    key={level}
-                    style={{ flexGrow: bin.counts[level], background: colors[level] }}
-                    className={s.segment}
-                  />
-                ) : null
-              )}
-            </div>
-          </div>
-        ))}
       </div>
-      {hover !== undefined && bins[hover] && (
+      {hovered && hover !== undefined && (
         <div
           className={s.tooltip}
           style={{
-            left: `${((hover + 0.5) / bins.length) * 100}%`,
-            transform: `translateX(${hover < bins.length / 2 ? '-20%' : '-80%'})`,
+            left: `${barsLeft + ((hover + 0.5) / bins.length) * barsShare}%`,
+            transform: `translateX(${barsLeft + (hover / bins.length) * barsShare < 50 ? '-20%' : '-80%'})`,
           }}
         >
           <div className={s.tooltipTime}>
             {drag && drag.start !== drag.end
-              ? `${formatTime(bins[Math.min(drag.start, drag.end)].start, timeZone, 'HH:mm:ss')} – ${formatTime(
-                  bins[Math.max(drag.start, drag.end)].end,
-                  timeZone,
-                  'HH:mm:ss'
-                )}`
-              : `${formatTime(bins[hover].start, timeZone, 'HH:mm:ss')} – ${formatTime(bins[hover].end, timeZone, 'HH:mm:ss')}`}
+              ? range(bins[Math.min(drag.start, drag.end)].start, bins[Math.max(drag.start, drag.end)].end)
+              : range(hovered.start, hovered.end)}
           </div>
-          <div className={s.tooltipTotal}>{bins[hover].total} logs</div>
-          {LEVEL_ORDER.filter((l) => bins[hover].counts[l]).map((l) => (
+          <div className={s.tooltipTotal}>{hovered.total} logs</div>
+          {LEVEL_ORDER.filter((l) => hovered.counts[l]).map((l) => (
             <div key={l} className={s.tooltipRow}>
               <span className={s.swatch} style={{ background: colors[l] }} />
               <span>{l === 'other' ? 'info / other' : l}</span>
-              <span className={s.tooltipCount}>{bins[hover].counts[l]}</span>
+              <span className={s.tooltipCount}>{hovered.counts[l]}</span>
             </div>
           ))}
           <div className={s.tooltipHint}>Click or drag to zoom</div>
         </div>
       )}
-      {hoverGap && showGap && unloaded && (
-        <div
-          className={s.tooltip}
-          style={{
-            left: `${((gap.from + (gap.to - gap.from) / 2 - start) / span) * 100}%`,
-            transform: 'translateX(-50%)',
-          }}
-        >
-          <div className={s.tooltipTime}>
-            {formatTime(gap.rawFrom, timeZone, 'HH:mm:ss')} – {formatTime(gap.rawTo, timeZone, 'HH:mm:ss')}
-          </div>
+      {hoverGap && gap && (
+        <div className={s.tooltip} style={{ left: `${gapLeft + gapWidth / 2}%`, transform: 'translateX(-50%)' }}>
+          <div className={s.tooltipTime}>{range(gap.from, gap.to)}</div>
           <div className={s.tooltipTotal}>
             {gap.whole
-              ? `${unloaded.count.toLocaleString('en-US')} logs not loaded`
-              : `Part of ${unloaded.count.toLocaleString('en-US')} logs not loaded`}
+              ? `${gap.count.toLocaleString('en-US')} logs not loaded`
+              : `Part of ${gap.count.toLocaleString('en-US')} logs not loaded`}
           </div>
           <div>They matched the query but did not fit its limit.</div>
           <div className={s.tooltipHint}>Click to run the query for this range</div>
         </div>
       )}
-      {bins.length > 0 && (
-        <div className={s.axis}>
-          <span>{formatTime(bins[0].start, timeZone, format)}</span>
-          <span className={s.axisMiddle}>
-            {formatTime(bins[Math.floor(bins.length / 2)].start, timeZone, format)}
-            {caption && <span className={s.caption}>{caption}</span>}
-          </span>
-          <span>{formatTime(bins[bins.length - 1].end, timeZone, format)}</span>
-        </div>
-      )}
+      <div className={s.axis}>
+        <span>{formatTime(view.from, timeZone, format)}</span>
+        <span className={s.axisMiddle}>
+          {formatTime(view.from + span / 2, timeZone, format)}
+          {caption && <span className={s.caption}>{caption}</span>}
+        </span>
+        <span>{formatTime(view.to, timeZone, format)}</span>
+      </div>
     </div>
   );
-}
-
-function snapGap(unloaded: Unloaded, bins: Bin[], start: number, end: number) {
-  const rawFrom = Math.max(unloaded.from, start);
-  const rawTo = Math.min(unloaded.to, end);
-  let from = rawFrom;
-  let to = rawTo;
-  const fromBin = bins.find((b) => from > b.start && from < b.end);
-  if (fromBin?.total) {
-    from = fromBin.end;
-  }
-  const toBin = bins.find((b) => to > b.start && to < b.end);
-  if (toBin?.total) {
-    to = toBin.start;
-  }
-  // from/to are for drawing; the click and the tooltip use the exact range.
-  return { from, to, rawFrom, rawTo, whole: unloaded.from >= start && unloaded.to <= end };
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
@@ -196,8 +188,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   gap: css({
     position: 'absolute',
-    top: 0,
-    bottom: 0,
+    top: 4,
+    bottom: 4,
     zIndex: 1,
     cursor: 'pointer',
     borderRadius: 2,
@@ -228,14 +220,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
   swatch: css({ width: 8, height: 8, borderRadius: 2 }),
   tooltipCount: css({ marginLeft: 'auto', paddingLeft: theme.spacing(2) }),
   tooltipHint: css({ marginTop: theme.spacing(0.5), color: theme.colors.text.disabled }),
-  bars: css({
+  track: css({
     position: 'relative',
+    height: 56,
+    borderBottom: `1px solid ${theme.colors.border.weak}`,
+  }),
+  // The bars cover only the loaded part of the axis; positioned in % of the whole range.
+  bars: css({
+    position: 'absolute',
+    top: 4,
+    bottom: 4,
     display: 'flex',
     alignItems: 'flex-end',
     gap: 2,
-    height: 56,
-    padding: theme.spacing(0.5, 0),
-    borderBottom: `1px solid ${theme.colors.border.weak}`,
   }),
   slot: css({
     flex: 1,
