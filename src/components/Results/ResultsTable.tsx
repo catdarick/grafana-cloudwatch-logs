@@ -1,16 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
 import { Button, Checkbox, ClipboardButton, Icon, IconButton, Input, useStyles2 } from '@grafana/ui';
 import { ColumnSettings, QueryResult } from '../../types';
+import { copyWithToast } from '../../utils/clipboard';
 import { formatTime } from '../../utils/timeRange';
 import {
   ValueFilters,
+  estimateWidth,
   fullLog,
+  histogram,
+  isMonoColumn,
   moveColumn,
   orderColumns,
   passesFilters,
+  queryFilter,
   rowMatches,
   splitMatches,
   valueCounts,
@@ -18,21 +24,27 @@ import {
 } from '../../utils/table';
 import { ColumnMenu } from './ColumnMenu';
 import { ColumnsPicker } from './ColumnsPicker';
+import { Histogram } from './Histogram';
+import { JsonTree } from './JsonTree';
 
 interface Props {
   result: QueryResult;
   timeZone: TimeZone;
   columns: ColumnSettings;
   onColumnsChange: (columns: ColumnSettings) => void;
+  /** Narrows the tab's time range and re-runs. */
+  onZoom: (from: number, to: number) => void;
+  /** Adds a Logs Insights clause to the tab's query and re-runs. */
+  onAddQueryFilter: (clause: string) => void;
 }
 
-const PAGE = 500;
 const EXPAND_WIDTH = 32;
-const DEFAULT_WIDTH = 200;
 const MIN_WIDTH = 48;
+/** Room left for the column that takes up the remaining width. */
+const FLEX_MIN_WIDTH = 240;
 const LEVEL_FIELDS = ['severity', 'level', 'loglevel', 'log_level', 'lvl'];
 
-type Level = 'error' | 'warning' | 'debug' | undefined;
+type Level = 'error' | 'warning' | 'info' | 'debug' | undefined;
 
 function rowLevel(row: Record<string, string>, levelField?: string): Level {
   const value = levelField ? row[levelField]?.toLowerCase() : undefined;
@@ -48,10 +60,13 @@ function rowLevel(row: Record<string, string>, levelField?: string): Level {
   if (/debug|trace/.test(value)) {
     return 'debug';
   }
+  if (/info|notice/.test(value)) {
+    return 'info';
+  }
   return undefined;
 }
 
-export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Props) {
+export function ResultsTable({ result, timeZone, columns, onColumnsChange, onZoom, onAddQueryFilter }: Props) {
   const s = useStyles2(getStyles);
   const [filters, setFilters] = useState<ValueFilters>({});
   const [search, setSearch] = useState('');
@@ -59,10 +74,22 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
   const [current, setCurrent] = useState(0);
   const [scrollRequest, setScrollRequest] = useState(0);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const [shown, setShown] = useState(PAGE);
+  // Rows whose long cells are shown in full instead of clamped to two lines.
+  const [unclamped, setUnclamped] = useState<Set<number>>(new Set());
   const [draftWidths, setDraftWidths] = useState<Record<string, number>>();
-  const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
-  const headerRefs = useRef(new Map<string, HTMLTableCellElement>());
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [viewWidth, setViewWidth] = useState(0);
+
+  // Expanded details are pinned to the visible part of a wide table, so they need its width.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    const observer = new ResizeObserver(() => setViewWidth(el.clientWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Time fields arrive as epoch millis; show them in the selected zone.
   const displayRows = useMemo(
@@ -81,6 +108,17 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
 
   const cols = useMemo(() => visibleColumns(result.fields, columns), [result.fields, columns]);
   const needle = search.trim().toLowerCase();
+  const levelField = result.fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
+
+  // Per column: starting width from content, and whether it holds ids/numbers/times.
+  const columnInfo = useMemo(() => {
+    const info: Record<string, { width: number; mono: boolean }> = {};
+    for (const f of result.fields) {
+      const values = displayRows.map((r) => r[f] ?? '');
+      info[f] = { width: estimateWidth(f, values), mono: result.timeFields.includes(f) || isMonoColumn(values) };
+    }
+    return info;
+  }, [displayRows, result.fields, result.timeFields]);
 
   const filtered = useMemo(
     () => displayRows.flatMap((row, index) => (passesFilters(row, filters) ? [index] : [])),
@@ -97,10 +135,31 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
   const rows = needle && hideNonMatching ? matches : filtered;
   const currentRow = matches.length > 0 ? matches[Math.min(current, matches.length - 1)] : undefined;
 
+  const bins = useMemo(() => {
+    const points = rows.flatMap((i) => {
+      const time = result.details[i]?.timestamp;
+      const level = rowLevel(displayRows[i], levelField);
+      return time === undefined ? [] : [{ time, group: level === 'info' || !level ? 'other' : level }];
+    });
+    return points.length > 0 ? histogram(points, result.from, result.to) : undefined;
+  }, [rows, result, displayRows, levelField]);
+
+  // No React Compiler here anyway; the virtualizer is re-read on every render by design.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 34,
+    overscan: 12,
+    getItemKey: (i) => rows[i],
+  });
+
   useEffect(() => {
     if (currentRow !== undefined) {
-      // Center rather than nearest: the toolbar sticks to the top and would cover a row scrolled to the edge.
-      rowRefs.current.get(currentRow)?.scrollIntoView({ block: 'center' });
+      const position = rows.indexOf(currentRow);
+      if (position >= 0) {
+        virtualizer.scrollToIndex(position, { align: 'center' });
+      }
     }
     // Scroll only when asked (typing or prev/next), not on every re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,12 +169,7 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
     if (matches.length === 0) {
       return;
     }
-    const next = (index + matches.length) % matches.length;
-    const position = rows.indexOf(matches[next]);
-    if (position >= shown) {
-      setShown(Math.ceil((position + 1) / PAGE) * PAGE);
-    }
-    setCurrent(next);
+    setCurrent((index + matches.length) % matches.length);
     setScrollRequest((n) => n + 1);
   };
 
@@ -131,31 +185,43 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
       allowed ? (next[field] = allowed) : delete next[field];
       return next;
     });
-    setShown(PAGE);
   };
 
-  const levelField = result.fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
+  const filterValue = (field: string, value: string, exclude: boolean) => {
+    if (!exclude) {
+      setFilter(field, new Set([value]));
+      return;
+    }
+    const allowed = new Set(filters[field] ?? displayRows.map((r) => r[field] ?? ''));
+    allowed.delete(value);
+    setFilter(field, allowed);
+  };
 
-  const toggle = (index: number) => {
-    const next = new Set(expanded);
+  const toggleIn = (set: Set<number>, update: (s: Set<number>) => void, index: number) => {
+    const next = new Set(set);
     next.has(index) ? next.delete(index) : next.add(index);
-    setExpanded(next);
+    update(next);
   };
 
-  // Columns size to content until the first resize; then every visible column gets a fixed width.
-  const widths = draftWidths ?? columns.widths ?? {};
-  const fixed = cols.some((f) => widths[f] !== undefined);
-  const widthOf = (f: string) => widths[f] ?? DEFAULT_WIDTH;
+  // Widths: what the user dragged, else an estimate from content. The widest unsized column
+  // takes the remaining space so the table always fills the panel.
+  const userWidths = draftWidths ?? columns.widths ?? {};
+  const flexCol = cols
+    .filter((f) => userWidths[f] === undefined)
+    .reduce<string | undefined>(
+      (best, f) => (!best || columnInfo[f].width > columnInfo[best].width ? f : best),
+      undefined
+    );
+  const widthOf = (f: string) => userWidths[f] ?? columnInfo[f]?.width ?? 120;
+  const fixedSum = EXPAND_WIDTH + cols.filter((f) => f !== flexCol).reduce((sum, f) => sum + widthOf(f), 0);
 
   const startResize = (event: React.MouseEvent, field: string) => {
     event.preventDefault();
     event.stopPropagation();
     const base: Record<string, number> = { ...(columns.widths ?? {}) };
-    if (!fixed) {
-      cols.forEach((f) => (base[f] = Math.round(headerRefs.current.get(f)?.getBoundingClientRect().width ?? 0)));
-    }
+    const th = (event.currentTarget as HTMLElement).parentElement;
     const startX = event.clientX;
-    const startWidth = base[field] ?? DEFAULT_WIDTH;
+    const startWidth = Math.round(th?.getBoundingClientRect().width ?? widthOf(field));
     let latest = base;
     const move = (e: MouseEvent) => {
       latest = { ...base, [field]: Math.max(MIN_WIDTH, Math.round(startWidth + e.clientX - startX)) };
@@ -196,8 +262,19 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
         )
       : text;
 
+  const renderCell = (field: string, value: string, index: number) => {
+    if (field === levelField && value) {
+      const level = rowLevel(displayRows[index], levelField) ?? 'none';
+      return <span className={cx(s.badge, s.badgeLevel[level])}>{highlight(value, index)}</span>;
+    }
+    return highlight(value, index);
+  };
+
   const filterCount = Object.keys(filters).length;
   const total = result.rows.length;
+  const items = virtualizer.getVirtualItems();
+  const padTop = items.length ? items[0].start : 0;
+  const padBottom = items.length ? virtualizer.getTotalSize() - items[items.length - 1].end : 0;
 
   return (
     <div className={s.wrapper}>
@@ -262,24 +339,25 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
         )}
         <ColumnsPicker fields={result.fields} settings={columns} onChange={onColumnsChange} />
       </div>
-      <div className={s.scroll}>
+
+      {bins && <Histogram bins={bins} timeZone={timeZone} onZoom={onZoom} />}
+
+      <div className={s.scroll} ref={scrollRef}>
         <table
-          className={cx(s.table, fixed && s.fixed)}
-          style={fixed ? { width: EXPAND_WIDTH + cols.reduce((sum, f) => sum + widthOf(f), 0) } : undefined}
+          className={s.table}
+          style={{ width: flexCol ? '100%' : fixedSum, minWidth: fixedSum + (flexCol ? FLEX_MIN_WIDTH : 0) }}
         >
-          {fixed && (
-            <colgroup>
-              <col style={{ width: EXPAND_WIDTH }} />
-              {cols.map((f) => (
-                <col key={f} style={{ width: widthOf(f) }} />
-              ))}
-            </colgroup>
-          )}
+          <colgroup>
+            <col style={{ width: EXPAND_WIDTH }} />
+            {cols.map((f) => (
+              <col key={f} style={f === flexCol ? undefined : { width: widthOf(f) }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
-              <th className={s.expandCol} />
+              <th />
               {cols.map((f) => (
-                <th key={f} ref={(el) => (el ? headerRefs.current.set(f, el) : headerRefs.current.delete(f))}>
+                <th key={f}>
                   <div className={s.header}>
                     <span className={s.headerName} title={f}>
                       {f}
@@ -304,62 +382,109 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
               ))}
             </tr>
           </thead>
-          <tbody>
-            {rows.slice(0, shown).map((index) => {
-              const row = displayRows[index];
-              const details = result.details?.[index];
-              return (
-                <React.Fragment key={index}>
-                  <tr
-                    ref={(el) => (el ? rowRefs.current.set(index, el) : rowRefs.current.delete(index))}
-                    className={cx(
-                      s.level[rowLevel(row, levelField) ?? 'none'],
-                      matchSet.has(index) && s.match,
-                      index === currentRow && s.current
-                    )}
-                  >
-                    <td className={s.expandCol}>
-                      <IconButton
-                        size="sm"
-                        name={expanded.has(index) ? 'angle-down' : 'angle-right'}
-                        aria-label="Toggle row details"
-                        onClick={() => toggle(index)}
+          {padTop > 0 && (
+            <tbody>
+              <tr style={{ height: padTop }} />
+            </tbody>
+          )}
+          {items.map((item) => {
+            const index = rows[item.index];
+            const row = displayRows[index];
+            const details = result.details[index];
+            const isOpen = expanded.has(index);
+            return (
+              <tbody key={item.key} data-index={item.index} ref={virtualizer.measureElement}>
+                <tr
+                  className={cx(
+                    s.row,
+                    item.index % 2 === 1 && s.odd,
+                    s.level[rowLevel(row, levelField) ?? 'none'],
+                    matchSet.has(index) && s.match,
+                    index === currentRow && s.current
+                  )}
+                >
+                  <td className={s.expandCell}>
+                    <IconButton
+                      size="sm"
+                      name={isOpen ? 'angle-down' : 'angle-right'}
+                      aria-label="Toggle row details"
+                      onClick={() => toggleIn(expanded, setExpanded, index)}
+                    />
+                  </td>
+                  {cols.map((f) => {
+                    const value = row[f] ?? '';
+                    return (
+                      <td key={f} className={cx(columnInfo[f]?.mono && s.mono)}>
+                        <div
+                          className={cx(s.cellText, !unclamped.has(index) && s.clamp)}
+                          onClick={() => {
+                            // Clicking expands long text; selecting text to copy should not.
+                            if (!window.getSelection()?.toString()) {
+                              toggleIn(unclamped, setUnclamped, index);
+                            }
+                          }}
+                        >
+                          {renderCell(f, value, index)}
+                        </div>
+                        {value && (
+                          <div className={s.cellActions}>
+                            <IconButton
+                              name="search-plus"
+                              size="sm"
+                              tooltip="Show only this value"
+                              onClick={() => filterValue(f, value, false)}
+                            />
+                            <IconButton
+                              name="search-minus"
+                              size="sm"
+                              tooltip="Hide this value"
+                              onClick={() => filterValue(f, value, true)}
+                            />
+                            <IconButton
+                              name="copy"
+                              size="sm"
+                              tooltip="Copy value"
+                              onClick={() => copyWithToast(result.rows[index][f] ?? value)}
+                            />
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+                {isOpen && (
+                  <tr className={s.detailsRow}>
+                    <td />
+                    <td colSpan={cols.length}>
+                      <LogDetailsView
+                        width={viewWidth - EXPAND_WIDTH - 24}
+                        log={fullLog(row, details)}
+                        logGroup={details?.logGroup}
+                        logStream={details?.logStream}
+                        onFilter={(path, value, negate) => onAddQueryFilter(queryFilter(path, value, negate))}
                       />
                     </td>
-                    {cols.map((f) => (
-                      <td key={f}>{highlight(row[f] ?? '', index)}</td>
-                    ))}
                   </tr>
-                  {expanded.has(index) && (
-                    <tr className={s.detailsRow}>
-                      <td />
-                      <td colSpan={cols.length}>
-                        <LogDetailsView
-                          json={JSON.stringify(fullLog(row, details), null, 2)}
-                          logGroup={details?.logGroup}
-                          logStream={details?.logStream}
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              );
-            })}
-            {rows.length === 0 && (
+                )}
+              </tbody>
+            );
+          })}
+          {padBottom > 0 && (
+            <tbody>
+              <tr style={{ height: padBottom }} />
+            </tbody>
+          )}
+          {rows.length === 0 && (
+            <tbody>
               <tr>
                 <td colSpan={cols.length + 1} className={s.empty} style={{ textAlign: 'center' }}>
                   {total === 0 ? 'No rows' : 'No rows match the current filters'}
                 </td>
               </tr>
-            )}
-          </tbody>
+            </tbody>
+          )}
         </table>
       </div>
-      {rows.length > shown && (
-        <button type="button" className={s.more} onClick={() => setShown(shown + PAGE)}>
-          Show {Math.min(PAGE, rows.length - shown)} more
-        </button>
-      )}
     </div>
   );
 }
@@ -370,24 +495,33 @@ function setDragCursor(dragging: boolean) {
   document.body.style.userSelect = dragging ? 'none' : '';
 }
 
-function LogDetailsView({ json, logGroup, logStream }: { json: string; logGroup?: string; logStream?: string }) {
+interface LogDetailsProps {
+  width: number;
+  log: unknown;
+  logGroup?: string;
+  logStream?: string;
+  onFilter: (path: string, value: unknown, negate: boolean) => void;
+}
+
+function LogDetailsView({ width, log, logGroup, logStream, onFilter }: LogDetailsProps) {
   const s = useStyles2(getStyles);
+  const json = useMemo(() => JSON.stringify(log, null, 2), [log]);
   return (
-    <div className={s.details}>
+    <div className={s.details} style={width > 0 ? { width } : undefined}>
       <div className={s.detailsBar}>
         <span className={s.source}>{[logGroup, logStream].filter(Boolean).join(' · ')}</span>
         <ClipboardButton size="sm" variant="secondary" fill="text" icon="copy" getText={() => json}>
           Copy JSON
         </ClipboardButton>
       </div>
-      <pre className={s.json}>{json}</pre>
+      <JsonTree value={log} onFilter={onFilter} />
     </div>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
   wrapper: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1), minHeight: 0 }),
-  // Sticks to the top of the page while scrolling through results, so search stays reachable.
+  // Sticks to the top of the page while scrolling, so search stays reachable.
   toolbar: css({
     position: 'sticky',
     top: 0,
@@ -401,17 +535,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   search: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1), marginRight: 'auto' }),
   count: css({ color: theme.colors.text.secondary, whiteSpace: 'nowrap' }),
+  // Own scroll area: keeps the header visible and lets only the rows on screen render.
   scroll: css({
     overflow: 'auto',
+    maxHeight: 'max(360px, calc(100vh - 220px))',
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
   }),
   table: css({
-    width: '100%',
-    borderCollapse: 'collapse',
+    tableLayout: 'fixed',
+    borderCollapse: 'separate',
+    borderSpacing: 0,
     fontSize: theme.typography.bodySmall.fontSize,
+    lineHeight: 1.5,
     'th, td': {
-      padding: theme.spacing(0.75, 1),
+      padding: theme.spacing(0.5, 1),
       textAlign: 'left',
       verticalAlign: 'top',
       borderBottom: `1px solid ${theme.colors.border.weak}`,
@@ -420,15 +559,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
     th: {
       position: 'sticky',
       top: 0,
-      zIndex: 1,
+      zIndex: 2,
       background: theme.colors.background.secondary,
       fontWeight: theme.typography.fontWeightMedium,
       whiteSpace: 'nowrap',
       paddingRight: theme.spacing(1.5),
     },
-    'tbody tr:hover': { background: theme.colors.action.hover },
   }),
-  fixed: css({ tableLayout: 'fixed' }),
   header: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
   headerName: css({ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }),
   resizer: css({
@@ -441,14 +578,57 @@ const getStyles = (theme: GrafanaTheme2) => ({
     borderRight: `1px solid ${theme.colors.border.weak}`,
     '&:hover': { borderRight: `2px solid ${theme.colors.primary.main}` },
   }),
-  expandCol: css({ width: EXPAND_WIDTH }),
+  row: css({
+    '& > td': { position: 'relative' },
+    '&:hover > td': { background: theme.colors.action.hover },
+    '& > td:hover > div:last-child': { visibility: 'visible' },
+  }),
+  odd: css({ '& > td': { background: theme.colors.background.secondary } }),
+  expandCell: css({ padding: `${theme.spacing(0.25, 0, 0, 0.5)} !important` }),
   level: {
     none: css({}),
-    error: css({ 'td:first-child': { boxShadow: `inset 3px 0 ${theme.colors.error.main}` } }),
-    warning: css({ 'td:first-child': { boxShadow: `inset 3px 0 ${theme.colors.warning.main}` } }),
+    info: css({}),
+    error: css({ '& > td:first-child': { boxShadow: `inset 3px 0 ${theme.colors.error.main}` } }),
+    warning: css({ '& > td:first-child': { boxShadow: `inset 3px 0 ${theme.colors.warning.main}` } }),
     debug: css({ color: theme.colors.text.secondary }),
   },
-  match: css({ background: theme.colors.action.selected }),
+  mono: css({ fontFamily: theme.typography.fontFamilyMonospace, fontSize: '0.95em' }),
+  cellText: css({ cursor: 'text' }),
+  clamp: css({
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+    cursor: 'pointer',
+  }),
+  cellActions: css({
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    display: 'flex',
+    gap: 2,
+    padding: 2,
+    visibility: 'hidden',
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+    boxShadow: theme.shadows.z2,
+  }),
+  badge: css({
+    display: 'inline-block',
+    padding: theme.spacing(0, 0.75),
+    borderRadius: theme.shape.radius.default,
+    fontSize: '0.9em',
+    fontWeight: theme.typography.fontWeightMedium,
+    lineHeight: 1.6,
+  }),
+  badgeLevel: {
+    none: css({ background: theme.colors.background.secondary }),
+    info: css({ background: theme.colors.primary.transparent, color: theme.colors.primary.text }),
+    error: css({ background: theme.colors.error.transparent, color: theme.colors.error.text }),
+    warning: css({ background: theme.colors.warning.transparent, color: theme.colors.warning.text }),
+    debug: css({ background: theme.colors.action.selected, color: theme.colors.text.secondary }),
+  },
+  match: css({ '& > td': { background: `${theme.colors.action.selected} !important` } }),
   current: css({ outline: `2px solid ${theme.colors.primary.border}`, outlineOffset: -2 }),
   mark: css({
     background: theme.colors.warning.transparent,
@@ -457,23 +637,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
     borderRadius: 2,
   }),
   empty: css({ color: theme.colors.text.secondary }),
-  detailsRow: css({ '&:hover': { background: 'none !important' } }),
-  details: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5) }),
+  detailsRow: css({ '& > td': { background: theme.colors.background.canvas } }),
+  details: css({
+    position: 'sticky',
+    left: EXPAND_WIDTH + 8,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.5),
+    padding: theme.spacing(0.5, 0),
+  }),
   detailsBar: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1) }),
   source: css({ flex: 1, color: theme.colors.text.secondary, wordBreak: 'break-all' }),
-  json: css({
-    margin: 0,
-    maxHeight: 600,
-    overflow: 'auto',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    fontSize: theme.typography.bodySmall.fontSize,
-  }),
-  more: css({
-    alignSelf: 'center',
-    background: 'none',
-    border: 'none',
-    color: theme.colors.text.link,
-    cursor: 'pointer',
-  }),
 });

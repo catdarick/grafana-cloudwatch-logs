@@ -1,19 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
-import { AppEvents, AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
-import {
-  DataSourcePicker,
-  PluginPage,
-  config,
-  getAppEvents,
-  getDataSourceSrv,
-  locationService,
-} from '@grafana/runtime';
+import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
+import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { Alert, Button, TimeZonePicker, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
 import { PLUGIN_BASE_URL } from '../../constants';
-import { AppSettings, QueryResult } from '../../types';
+import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
+import { copyWithToast } from '../../utils/clipboard';
+import { addQueryStage } from '../../utils/table';
 import { SHARE_PARAM_KEYS, fromShareParams, toShareParams } from '../../utils/shareLink';
 import { formatTime, isValidRange, toEpochRange, zoneLabel } from '../../utils/timeRange';
 import { LogGroups } from '../LogGroups/LogGroups';
@@ -37,6 +32,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const [results, setResults] = useState<Record<string, QueryResult | undefined>>({});
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [runError, setRunError] = useState<Record<string, string | undefined>>({});
+  // Hides log groups and the editor so the results get the whole page.
+  const [focusResults, setFocusResults] = useState(false);
   const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
 
   // A shared link opens its query in a tab once; the params are then dropped so a reload keeps the workspace.
@@ -86,19 +83,21 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const canRun =
     Boolean(datasourceUid) && tab.logGroups.length > 0 && tab.query.trim() !== '' && isValidRange(tab.timeRange);
 
-  const run = async () => {
+  /** Runs the active tab; overrides cover changes made in the same click, before state has updated. */
+  const run = async (override: { query?: string; timeRange?: TimeRangeValue } = {}) => {
     if (!datasourceUid || !canRun) {
       return;
     }
     const tabId = tab.id;
-    const { from, to } = toEpochRange(tab.timeRange);
+    const query = override.query ?? tab.query;
+    const { from, to } = toEpochRange(override.timeRange ?? tab.timeRange);
     setRunning((r) => ({ ...r, [tabId]: true }));
     setRunError((e) => ({ ...e, [tabId]: undefined }));
     try {
       const result = await runLogsQuery({
         datasourceUid,
         requestId: requestId(tabId),
-        query: tab.query,
+        query,
         logGroups: tab.logGroups,
         from,
         to,
@@ -126,13 +125,23 @@ function App({ meta }: AppRootProps<AppSettings>) {
         : tab.timeRange;
     const params = toShareParams({ query: tab.query, logGroups: tab.logGroups, timeRange, datasourceUid });
     const url = `${window.location.origin}${config.appSubUrl}${PLUGIN_BASE_URL}?${params}`;
-    copyText(url).then(
-      () => getAppEvents().publish({ type: AppEvents.alertSuccess.name, payload: ['Link copied'] }),
-      () => getAppEvents().publish({ type: AppEvents.alertError.name, payload: ['Could not copy the link'] })
-    );
+    copyWithToast(url, 'Link copied');
   };
 
   const error = runError[tab.id] ?? result?.error;
+  const failed = Object.fromEntries(ws.state.tabs.map((t) => [t.id, Boolean(runError[t.id] ?? results[t.id]?.error)]));
+
+  const zoomTo = (from: number, to: number) => {
+    const timeRange: TimeRangeValue = { mode: 'absolute', from: Math.floor(from), to: Math.ceil(to) };
+    ws.updateTab(tab.id, { timeRange });
+    run({ timeRange });
+  };
+
+  const addQueryFilter = (clause: string) => {
+    const query = addQueryStage(tab.query, clause);
+    ws.updateTab(tab.id, { query });
+    run({ query });
+  };
 
   return (
     <PluginPage layout={PageLayoutType.Canvas}>
@@ -143,6 +152,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
             activeTabId={tab.id}
             results={results}
             running={running}
+            failed={failed}
             onSelect={ws.selectTab}
             onClose={(id) => {
               cancelQuery(requestId(id));
@@ -167,55 +177,66 @@ function App({ meta }: AppRootProps<AppSettings>) {
           />
         </div>
 
-        <LogGroups
-          key={`${tab.id}:${defaultRegion}`}
-          datasourceUid={datasourceUid}
-          defaultRegion={defaultRegion}
-          selected={tab.logGroups}
-          favorites={ws.state.favorites}
-          onSelectedChange={(logGroups) => ws.updateTab(tab.id, { logGroups })}
-          onToggleFavorite={ws.toggleFavorite}
-        />
-
-        <div className={s.editorRow}>
-          <QueryEditor
-            key={tab.id}
-            query={tab.query}
-            fields={completionFields}
-            savedQueryName={tab.savedQueryName}
-            savedQueries={ws.state.savedQueries}
-            onChange={(query, savedQueryName) => ws.updateTab(tab.id, { query, savedQueryName })}
-            onRun={run}
-            onSave={ws.saveQuery}
-            onDelete={ws.deleteQuery}
-            relativeTime={tab.timeRange.mode === 'relative'}
-            onCopyLink={copyLink}
-          />
-          <section className={s.timeColumn}>
-            <h5 className={s.title}>Time range</h5>
-            <TimeRangePicker
-              value={tab.timeRange}
-              timeZone={ws.state.timeZone}
-              onChange={(timeRange) => ws.updateTab(tab.id, { timeRange })}
+        {!focusResults && (
+          <>
+            <LogGroups
+              key={`${tab.id}:${defaultRegion}`}
+              datasourceUid={datasourceUid}
+              defaultRegion={defaultRegion}
+              selected={tab.logGroups}
+              favorites={ws.state.favorites}
+              onSelectedChange={(logGroups) => ws.updateTab(tab.id, { logGroups })}
+              onToggleFavorite={ws.toggleFavorite}
             />
-            {running[tab.id] ? (
-              <Button
-                size="lg"
-                variant="destructive"
-                icon="square-shape"
-                fullWidth
-                onClick={() => cancelQuery(requestId(tab.id))}
-              >
-                Stop
-              </Button>
-            ) : (
-              <Button size="lg" icon="play" fullWidth disabled={!canRun} onClick={run} tooltip="Ctrl/Cmd + Enter">
-                Run query
-              </Button>
-            )}
-            {tab.logGroups.length === 0 && <span className={s.hint}>Select at least one log group</span>}
-          </section>
-        </div>
+
+            <div className={s.editorRow}>
+              <QueryEditor
+                key={tab.id}
+                query={tab.query}
+                fields={completionFields}
+                savedQueryName={tab.savedQueryName}
+                savedQueries={ws.state.savedQueries}
+                onChange={(query, savedQueryName) => ws.updateTab(tab.id, { query, savedQueryName })}
+                onRun={() => run()}
+                onSave={ws.saveQuery}
+                onDelete={ws.deleteQuery}
+                relativeTime={tab.timeRange.mode === 'relative'}
+                onCopyLink={copyLink}
+              />
+              <section className={s.timeColumn}>
+                <h5 className={s.title}>Time range</h5>
+                <TimeRangePicker
+                  value={tab.timeRange}
+                  timeZone={ws.state.timeZone}
+                  onChange={(timeRange) => ws.updateTab(tab.id, { timeRange })}
+                />
+                {running[tab.id] ? (
+                  <Button
+                    size="lg"
+                    variant="destructive"
+                    icon="square-shape"
+                    fullWidth
+                    onClick={() => cancelQuery(requestId(tab.id))}
+                  >
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    size="lg"
+                    icon="play"
+                    fullWidth
+                    disabled={!canRun}
+                    onClick={() => run()}
+                    tooltip="Ctrl/Cmd + Enter"
+                  >
+                    Run query
+                  </Button>
+                )}
+                {tab.logGroups.length === 0 && <span className={s.hint}>Select at least one log group</span>}
+              </section>
+            </div>
+          </>
+        )}
 
         {error && (
           <Alert severity="error" title="Query failed">
@@ -226,8 +247,25 @@ function App({ meta }: AppRootProps<AppSettings>) {
         {result && !result.error && (
           <section className={s.results}>
             <div className={s.meta}>
-              {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
-              {zoneLabel(result.from, ws.state.timeZone)} · {(result.durationMs / 1000).toFixed(1)}s
+              <span>
+                {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
+                {zoneLabel(result.from, ws.state.timeZone)}
+              </span>
+              {statsParts(result).map((part) => (
+                <span key={part} className={s.stat}>
+                  {part}
+                </span>
+              ))}
+              <Button
+                className={s.focusToggle}
+                size="sm"
+                variant="secondary"
+                fill="text"
+                icon={focusResults ? 'angle-double-down' : 'angle-double-up'}
+                onClick={() => setFocusResults(!focusResults)}
+              >
+                {focusResults ? 'Show query' : 'Expand results'}
+              </Button>
             </div>
             <ResultsTable
               key={result.ranAt}
@@ -235,6 +273,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
               timeZone={ws.state.timeZone}
               columns={tab.columns ?? {}}
               onColumnsChange={(columns) => ws.updateTab(tab.id, { columns })}
+              onZoom={zoomTo}
+              onAddQueryFilter={addQueryFilter}
             />
           </section>
         )}
@@ -245,25 +285,26 @@ function App({ meta }: AppRootProps<AppSettings>) {
 
 export default App;
 
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch {
-    // No Clipboard API (plain-http Grafana) or permission denied: fall back to a hidden textarea.
+/** "2.3s", "Scanned 1.2 GB", "48,312 records", "50 matched": what the query cost and found. */
+function statsParts(result: QueryResult): string[] {
+  const { bytesScanned, recordsScanned, recordsMatched } = result.stats ?? {};
+  return [
+    `${(result.durationMs / 1000).toFixed(1)}s`,
+    bytesScanned !== undefined ? `Scanned ${formatBytes(bytesScanned)}` : '',
+    recordsScanned !== undefined ? `${Math.round(recordsScanned).toLocaleString('en-US')} records` : '',
+    recordsMatched !== undefined ? `${Math.round(recordsMatched).toLocaleString('en-US')} matched` : '',
+  ].filter(Boolean);
+}
+
+function formatBytes(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
   }
-  const area = document.createElement('textarea');
-  area.value = text;
-  area.style.position = 'fixed';
-  area.style.opacity = '0';
-  document.body.appendChild(area);
-  area.select();
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- the only option without the Clipboard API
-  const ok = document.execCommand('copy');
-  area.remove();
-  if (!ok) {
-    throw new Error('copy failed');
-  }
+  return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
 }
 
 function isCancelled(e: unknown): boolean {
@@ -303,5 +344,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
   title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
-  meta: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
+  meta: css({
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: theme.spacing(1),
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  stat: css({
+    padding: theme.spacing(0, 1),
+    borderRadius: theme.shape.radius.pill,
+    background: theme.colors.background.secondary,
+    fontVariantNumeric: 'tabular-nums',
+  }),
+  focusToggle: css({ marginLeft: 'auto' }),
 });

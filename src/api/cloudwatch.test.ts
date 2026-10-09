@@ -21,9 +21,26 @@ describe('framesToRows', () => {
   it('keeps the raw message and log group per row', () => {
     const { details } = framesToRows([frame], 'fields message');
     expect(details).toEqual([
-      { message: '{"a":1}', logGroup: 'g', logStream: undefined },
-      { message: undefined, logGroup: 'g', logStream: undefined },
+      { message: '{"a":1}', logGroup: 'g', logStream: undefined, timestamp: 1760000000000 },
+      { message: undefined, logGroup: 'g', logStream: undefined, timestamp: 1760000001000 },
     ]);
+  });
+
+  it('sums query statistics across frames', () => {
+    const withStats = (bytes: number) =>
+      toDataFrame({
+        fields: [{ name: 'message', type: FieldType.string, values: ['x'] }],
+        meta: {
+          stats: [
+            { displayName: 'Bytes scanned', value: bytes },
+            { displayName: 'Records matched', value: 1 },
+          ],
+        },
+      });
+    expect(framesToRows([withStats(100), withStats(50)], 'fields message').stats).toEqual({
+      bytesScanned: 150,
+      recordsMatched: 2,
+    });
   });
 
   it('prepends the message field to the query', () => {

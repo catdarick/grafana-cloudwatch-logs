@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { Alert, Button, Icon, IconButton, Input, Spinner, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Checkbox, Icon, IconButton, Input, Toggletip, useStyles2 } from '@grafana/ui';
 import { fetchLogGroups } from '../../api/cloudwatch';
 import { sameGroup } from '../../state/useWorkspace';
 import { LogGroupRef } from '../../types';
@@ -24,10 +24,9 @@ export function LogGroups({
   onToggleFavorite,
 }: Props) {
   const s = useStyles2(getStyles);
-  const [browseOpen, setBrowseOpen] = useState(favorites.length === 0);
   const [region, setRegion] = useState(defaultRegion);
   const [prefix, setPrefix] = useState('');
-  const [found, setFound] = useState<LogGroupRef[]>([]);
+  const [found, setFound] = useState<LogGroupRef[]>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -35,9 +34,6 @@ export function LogGroups({
   const isFavorite = (g: LogGroupRef) => favorites.some((x) => sameGroup(x, g));
   const toggle = (g: LogGroupRef) =>
     onSelectedChange(isSelected(g) ? selected.filter((x) => !sameGroup(x, g)) : [...selected, g]);
-
-  // Selected groups that are not favorites still need a chip so they can be deselected.
-  const chips = [...favorites, ...selected.filter((g) => !isFavorite(g))];
 
   const search = async () => {
     if (!datasourceUid) {
@@ -54,76 +50,87 @@ export function LogGroups({
     }
   };
 
+  const item = (g: LogGroupRef) => (
+    <li key={`${g.region}:${g.arn ?? g.name}`} className={s.listItem}>
+      <IconButton
+        name={isFavorite(g) ? 'favorite' : 'star'}
+        className={cx(isFavorite(g) && s.favorite)}
+        tooltip={isFavorite(g) ? 'Remove from favorites' : 'Add to favorites'}
+        onClick={() => onToggleFavorite(g)}
+      />
+      <Checkbox className={s.checkbox} value={isSelected(g)} onChange={() => toggle(g)} label={g.name} />
+      <span className={s.region}>{g.region}</span>
+    </li>
+  );
+
+  const picker = (
+    <div className={s.picker}>
+      {favorites.length > 0 && (
+        <div className={s.group}>
+          <div className={s.groupTitle}>Favorites</div>
+          <ul className={s.list}>{favorites.map(item)}</ul>
+        </div>
+      )}
+      <div className={s.group}>
+        <div className={s.groupTitle}>Browse</div>
+        <div className={s.searchRow}>
+          <Input width={22} value={region} onChange={(e) => setRegion(e.currentTarget.value)} prefix="Region" />
+          <Input
+            autoFocus
+            value={prefix}
+            placeholder="Name prefix, e.g. /k8s/"
+            onChange={(e) => setPrefix(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && search()}
+          />
+          <Button onClick={search} disabled={!datasourceUid || loading} icon={loading ? 'spinner' : 'search'}>
+            Search
+          </Button>
+        </div>
+        {error && (
+          <Alert severity="error" title="Could not list log groups">
+            {error}
+          </Alert>
+        )}
+        {found && (
+          <ul className={cx(s.list, s.results)}>
+            {found.map(item)}
+            {found.length === 0 && <li className={s.empty}>No log groups with this prefix</li>}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <section className={s.section}>
-      <div className={s.header}>
-        <h5 className={s.title}>
-          Log groups <span className={s.badge}>{selected.length} selected</span>
-        </h5>
-        <Button
-          variant="secondary"
-          size="sm"
-          fill="text"
-          icon={browseOpen ? 'angle-down' : 'angle-right'}
-          onClick={() => setBrowseOpen(!browseOpen)}
+      <h5 className={s.title}>Log groups</h5>
+      <div className={s.chips}>
+        {selected.map((g) => (
+          <span key={`${g.region}:${g.name}`} className={s.chip} title={`${g.name} (${g.region})`}>
+            {isFavorite(g) && <Icon name="favorite" size="xs" className={s.favorite} />}
+            <span className={s.chipName}>{g.name}</span>
+            <span className={s.region}>{g.region}</span>
+            <IconButton name="times" size="xs" aria-label={`Remove ${g.name}`} onClick={() => toggle(g)} />
+          </span>
+        ))}
+        {selected.length === 0 && <span className={s.placeholder}>No log groups selected</span>}
+        <Toggletip
+          placement="bottom-start"
+          fitContent
+          closeButton={false}
+          content={picker}
+          onOpen={() => found === undefined && search()}
         >
-          Other groups
-        </Button>
+          <Button size="sm" variant={selected.length ? 'secondary' : 'primary'} icon="plus">
+            {selected.length ? 'Add' : 'Add log groups'}
+          </Button>
+        </Toggletip>
+        {selected.length > 1 && (
+          <Button size="sm" variant="secondary" fill="text" onClick={() => onSelectedChange([])}>
+            Clear
+          </Button>
+        )}
       </div>
-
-      {chips.length > 0 && (
-        <div className={s.chips}>
-          <Icon name="star" className={s.star} title="Favorites" />
-          {chips.map((g) => (
-            <button
-              key={`${g.region}:${g.name}`}
-              type="button"
-              className={cx(s.chip, isSelected(g) && s.chipActive)}
-              onClick={() => toggle(g)}
-            >
-              {isSelected(g) && <Icon name="check" />}
-              {g.name} <span className={s.region}>({g.region})</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {browseOpen && (
-        <div className={s.browse}>
-          <div className={s.searchRow}>
-            <Input width={18} value={region} onChange={(e) => setRegion(e.currentTarget.value)} prefix="Region" />
-            <Input
-              value={prefix}
-              placeholder="Log group name prefix, e.g. /k8s/"
-              onChange={(e) => setPrefix(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === 'Enter' && search()}
-            />
-            <Button onClick={search} disabled={!datasourceUid || loading} icon="search">
-              Search
-            </Button>
-          </div>
-          {loading && <Spinner />}
-          {error && (
-            <Alert severity="error" title="Could not list log groups">
-              {error}
-            </Alert>
-          )}
-          <ul className={s.list}>
-            {found.map((g) => (
-              <li key={g.arn ?? g.name} className={s.listItem}>
-                <IconButton
-                  name={isFavorite(g) ? 'favorite' : 'star'}
-                  tooltip={isFavorite(g) ? 'Remove from favorites' : 'Add to favorites'}
-                  onClick={() => onToggleFavorite(g)}
-                />
-                <label className={s.listLabel}>
-                  <input type="checkbox" checked={isSelected(g)} onChange={() => toggle(g)} /> {g.name}
-                </label>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </section>
   );
 }
@@ -139,54 +146,49 @@ function errorMessage(e: unknown): string {
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  section: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
-  header: css({ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }),
-  title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
-  badge: css({
-    marginLeft: theme.spacing(1),
-    padding: theme.spacing(0.25, 1),
-    borderRadius: theme.shape.radius.pill,
-    background: theme.colors.background.secondary,
-    color: theme.colors.text.secondary,
-    fontSize: theme.typography.bodySmall.fontSize,
-  }),
-  chips: css({
-    display: 'flex',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    padding: theme.spacing(1),
-    background: theme.colors.background.secondary,
-    borderRadius: theme.shape.radius.default,
-  }),
-  star: css({ color: theme.colors.warning.text }),
+  section: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(2), minWidth: 0 }),
+  title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }),
+  chips: css({ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: theme.spacing(1), minWidth: 0 }),
   chip: css({
     display: 'inline-flex',
     alignItems: 'center',
-    gap: theme.spacing(0.5),
-    padding: theme.spacing(0.5, 1.5),
-    border: `1px solid ${theme.colors.border.medium}`,
+    gap: theme.spacing(0.75),
+    height: theme.spacing(3),
+    padding: theme.spacing(0, 0.5, 0, 1),
     borderRadius: theme.shape.radius.default,
-    background: theme.colors.background.primary,
-    color: theme.colors.text.primary,
-    cursor: 'pointer',
+    background: theme.colors.primary.transparent,
+    border: `1px solid ${theme.colors.primary.border}`,
+    fontSize: theme.typography.bodySmall.fontSize,
+    maxWidth: 420,
   }),
-  chipActive: css({
-    background: theme.colors.primary.main,
-    borderColor: theme.colors.primary.main,
-    color: theme.colors.primary.contrastText,
-  }),
-  region: css({ opacity: 0.75 }),
-  browse: css({
-    display: 'flex',
-    flexDirection: 'column',
-    gap: theme.spacing(1),
-    padding: theme.spacing(1),
-    border: `1px solid ${theme.colors.border.weak}`,
-    borderRadius: theme.shape.radius.default,
+  chipName: css({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+  region: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
+  favorite: css({ color: theme.colors.warning.text }),
+  placeholder: css({ color: theme.colors.text.secondary }),
+  picker: css({ width: 560, display: 'flex', flexDirection: 'column', gap: theme.spacing(2) }),
+  group: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
+  groupTitle: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   }),
   searchRow: css({ display: 'flex', gap: theme.spacing(1) }),
-  list: css({ listStyle: 'none', margin: 0, padding: 0, maxHeight: 240, overflowY: 'auto' }),
-  listItem: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1) }),
-  listLabel: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1), margin: 0, cursor: 'pointer' }),
+  list: css({ listStyle: 'none', margin: 0, padding: 0, maxHeight: 200, overflowY: 'auto' }),
+  results: css({ maxHeight: 300 }),
+  listItem: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    padding: theme.spacing(0.25, 0.5),
+    borderRadius: theme.shape.radius.default,
+    '&:hover': { background: theme.colors.action.hover },
+  }),
+  checkbox: css({
+    flex: 1,
+    minWidth: 0,
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    '& > span:last-child': { maxWidth: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  }),
+  empty: css({ padding: theme.spacing(1), color: theme.colors.text.secondary }),
 });

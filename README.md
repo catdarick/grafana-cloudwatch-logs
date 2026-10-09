@@ -18,6 +18,10 @@ Requires **Grafana 10.4** or later.
 - "Copy link" in the editor copies a link like `/a/gauss-cloudwatchlogs-app?query=…&group=<region>:<group>&from=now-30m&to=now&ds=<uid>`
   (a relative range can be pinned to the last run). Opening it puts the query in a new tab
   (or selects an identical one) and removes the params from the address. The query is not run automatically.
+- Grafana sorts log rows by time ascending and loses the query's `sort`; the plugin re-applies
+  the query's last `sort` to the returned rows (including rows merged from several regions).
+- The histogram above the table is built from the loaded rows (free); selecting or clicking bars narrows
+  the time range and re-runs the query. The +/− actions in the expanded JSON add a `filter` to the query and re-run it.
 - Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
   the whole log (the JSON in `@message`), not just the query's fields. `stats` queries and queries with `display` lack it,
   and the row's fields are shown instead.
@@ -35,7 +39,7 @@ src/
   components/QueryEditor/      editor (Monaco) + saved queries
   language/logsInsights.ts     Logs Insights syntax highlighting
   components/Tabs/             tabs
-  components/Results/          results table: columns, value filters, search, full log
+  components/Results/          results table (virtualized), histogram, JSON tree, columns, filters, search
   utils/table.ts               column order, value counts, search, full log parsing
   components/AppConfig/        settings page (default data source and region)
 ```

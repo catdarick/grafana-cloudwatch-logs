@@ -103,3 +103,135 @@ export function fullLog(row: Row, details: LogDetails | undefined): unknown {
   }
   return { ...row, '@message': message };
 }
+
+const PLAIN_FIELD = /^[@A-Za-z_][\w.@-]*$/;
+
+/** A Logs Insights `filter` clause for a field and a value taken from a log. */
+export function queryFilter(path: string, value: unknown, negate: boolean): string {
+  const field = PLAIN_FIELD.test(path) ? path : `\`${path.replace(/`/g, '``')}\``;
+  if (value === null || value === undefined) {
+    return negate ? `filter ispresent(${field})` : `filter isempty(${field})`;
+  }
+  const literal =
+    typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(String(value));
+  return `filter ${field} ${negate ? '!=' : '='} ${literal}`;
+}
+
+/**
+ * Adds a clause before the first sort/limit/stats/dedup/display stage, so it narrows the logs
+ * rather than the already limited or aggregated output.
+ */
+export function addQueryStage(query: string, clause: string): string {
+  const match = /\|\s*(sort|limit|stats|dedup|display)\b/.exec(query);
+  if (!match) {
+    return `${query.trimEnd()}\n| ${clause}`;
+  }
+  return `${query.slice(0, match.index).trimEnd()}\n| ${clause}\n${query.slice(match.index)}`;
+}
+
+const MONO_VALUE = /^(-?\d+(\.\d+)?|[0-9a-f]{8,}|[0-9a-f]{8}-[0-9a-f-]{27,}|\d{4}-\d\d-\d\d[T ][\d:.]+Z?)$/i;
+
+/** Ids, numbers and timestamps read better in a monospace font. */
+export function isMonoColumn(values: string[]): boolean {
+  const sample = values.filter(Boolean).slice(0, 100);
+  return sample.length > 0 && sample.every((v) => MONO_VALUE.test(v));
+}
+
+/** Starting width from the header and the 90th percentile of value lengths. */
+export function estimateWidth(field: string, values: string[]): number {
+  const lengths = values
+    .slice(0, 300)
+    .map((v) => v.length)
+    .sort((a, b) => a - b);
+  const typical = lengths.length ? lengths[Math.floor((lengths.length - 1) * 0.9)] : 0;
+  const chars = Math.max(field.length + 3, typical);
+  return Math.round(Math.min(420, Math.max(72, chars * 7.5 + 24)));
+}
+
+export interface Bin {
+  start: number;
+  end: number;
+  counts: Record<string, number>;
+  total: number;
+}
+
+/** Splits [from, to) into equal bins and counts points per bin, split by a category. */
+export function histogram(points: Array<{ time: number; group: string }>, from: number, to: number, bins = 60): Bin[] {
+  const size = Math.max(1, (to - from) / bins);
+  const result: Bin[] = Array.from({ length: bins }, (_, i) => ({
+    start: from + i * size,
+    end: from + (i + 1) * size,
+    counts: {},
+    total: 0,
+  }));
+  for (const { time, group } of points) {
+    if (time < from || time > to) {
+      continue;
+    }
+    const bin = result[Math.min(bins - 1, Math.floor((time - from) / size))];
+    bin.counts[group] = (bin.counts[group] ?? 0) + 1;
+    bin.total++;
+  }
+  return result;
+}
+
+export interface SortKey {
+  field: string;
+  desc: boolean;
+}
+
+/** The query's last `sort` command, e.g. "sort @timestamp desc, level" → two keys. */
+export function parseSort(query: string): SortKey[] {
+  const all = Array.from(query.matchAll(/\|\s*sort\s+([^|]+)/gi));
+  const last = all[all.length - 1];
+  if (!last) {
+    return [];
+  }
+  return last[1]
+    .split(',')
+    .map((part) => part.trim().split(/\s+/))
+    .filter((words) => words[0])
+    .map(([field, dir]) => ({ field: field.replace(/^`|`$/g, ''), desc: dir?.toLowerCase() === 'desc' }));
+}
+
+/**
+ * Order of row indexes following the sort keys. Values that are both numbers compare as numbers;
+ * missing values go last. getValue lets @timestamp come from row details when it is not a column.
+ */
+export function sortOrder(
+  count: number,
+  keys: SortKey[],
+  getValue: (index: number, field: string) => unknown
+): number[] {
+  const order = Array.from({ length: count }, (_, i) => i);
+  if (keys.length === 0) {
+    return order;
+  }
+  return order.sort((a, b) => {
+    for (const { field, desc } of keys) {
+      const va = getValue(a, field);
+      const vb = getValue(b, field);
+      // Missing values go last in either direction.
+      const missing = Number(isMissing(va)) - Number(isMissing(vb));
+      if (missing !== 0) {
+        return missing;
+      }
+      const cmp = isMissing(va) ? 0 : compareValues(va, vb);
+      if (cmp !== 0) {
+        return desc ? -cmp : cmp;
+      }
+    }
+    return a - b;
+  });
+}
+
+const isMissing = (v: unknown) => v === undefined || v === null || v === '';
+
+function compareValues(a: unknown, b: unknown): number {
+  const na = Number(a);
+  const nb = Number(b);
+  if (!Number.isNaN(na) && !Number.isNaN(nb)) {
+    return na - nb;
+  }
+  return String(a).localeCompare(String(b));
+}

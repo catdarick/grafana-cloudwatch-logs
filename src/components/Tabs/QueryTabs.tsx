@@ -9,6 +9,8 @@ interface Props {
   activeTabId: string;
   results: Record<string, QueryResult | undefined>;
   running: Record<string, boolean>;
+  /** Tabs whose last run failed, including request errors that never produced a result. */
+  failed: Record<string, boolean>;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onAdd: () => void;
@@ -16,7 +18,7 @@ interface Props {
 }
 
 /** Each tab is a full workspace: its own log groups, query, time range and results. */
-export function QueryTabs({ tabs, activeTabId, results, running, onSelect, onClose, onAdd, onRename }: Props) {
+export function QueryTabs({ tabs, activeTabId, results, running, failed, onSelect, onClose, onAdd, onRename }: Props) {
   const s = useStyles2(getStyles);
   const [editing, setEditing] = useState<string>();
 
@@ -59,12 +61,12 @@ export function QueryTabs({ tabs, activeTabId, results, running, onSelect, onClo
                   <>
                     <Spinner inline size="xs" /> running
                   </>
+                ) : failed[tab.id] ? (
+                  <>
+                    <span className={s.errorDot} /> error
+                  </>
                 ) : result ? (
-                  result.error ? (
-                    'error'
-                  ) : (
-                    `${result.rows.length} rows · ${new Date(result.ranAt).toLocaleTimeString()}`
-                  )
+                  `${result.rows.length} rows · ${new Date(result.ranAt).toLocaleTimeString()}`
                 ) : (
                   'not run'
                 )}
@@ -113,7 +115,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   text: css({ display: 'flex', flexDirection: 'column', lineHeight: 1.3 }),
   title: css({ fontWeight: theme.typography.fontWeightMedium }),
-  sub: css({ fontSize: theme.typography.bodySmall.fontSize, opacity: 0.8 }),
+  sub: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    fontSize: theme.typography.bodySmall.fontSize,
+    opacity: 0.8,
+  }),
+  errorDot: css({
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: theme.colors.error.main,
+    boxShadow: `0 0 0 1px ${theme.colors.background.primary}`,
+  }),
   rename: css({ width: 140, color: theme.colors.text.primary, background: theme.colors.background.primary }),
   add: css({ alignSelf: 'center' }),
 });

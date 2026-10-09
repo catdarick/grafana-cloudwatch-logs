@@ -20,7 +20,14 @@ export interface QueryResult {
   rows: Array<Record<string, string>>;
   /** Per row: the whole log event, which the query's own fields may not include. */
   details: LogDetails[];
+  stats: QueryStats;
   error?: string;
+}
+
+export interface QueryStats {
+  bytesScanned?: number;
+  recordsScanned?: number;
+  recordsMatched?: number;
 }
 
 export interface LogDetails {
@@ -28,6 +35,8 @@ export interface LogDetails {
   message?: string;
   logGroup?: string;
   logStream?: string;
+  /** Epoch millis of @timestamp, which Grafana adds to every query. */
+  timestamp?: number;
 }
 
 /** Table layout per tab, keyed by field name so it survives re-running the query. */

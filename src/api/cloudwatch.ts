@@ -7,7 +7,8 @@ import {
   getBackendSrv,
   toDataQueryResponse,
 } from '@grafana/runtime';
-import { LogDetails, LogGroupRef, QueryResult } from '../types';
+import { LogDetails, LogGroupRef, QueryResult, QueryStats } from '../types';
+import { parseSort, sortOrder } from '../utils/table';
 
 // Fields Grafana adds to every Logs Insights query (see pkg/tsdb/cloudwatch/log_actions.go).
 const INTERNAL_FIELD_SUFFIX = '__grafana_internal__';
@@ -83,7 +84,7 @@ export async function runLogsQuery(args: RunQueryArgs): Promise<QueryResult> {
   });
 
   const parsed = toDataQueryResponse(response);
-  const result = framesToRows(parsed.data as DataFrame[], args.query);
+  const result = applyQuerySort(framesToRows(parsed.data as DataFrame[], args.query), args.query);
   return {
     ...result,
     ranAt: startedAt,
@@ -143,16 +144,19 @@ function groupByRegion(groups: LogGroupRef[]): Map<string, LogGroupRef[]> {
 export function framesToRows(
   frames: DataFrame[],
   query: string
-): Pick<QueryResult, 'fields' | 'timeFields' | 'rows' | 'details'> {
+): Pick<QueryResult, 'fields' | 'timeFields' | 'rows' | 'details' | 'stats'> {
   // Grafana prepends "fields @timestamp" to every query; hide it unless the user asked for it.
   const showTimestamp = query.includes('@timestamp');
   const fields: string[] = [];
   const timeFields = new Set<string>();
   const rows: Array<Record<string, string>> = [];
   const details: LogDetails[] = [];
+  const stats: QueryStats = {};
 
   for (const frame of frames) {
+    addStats(stats, frame);
     const internal = (name: string) => frame.fields.find((f) => f.name === name);
+    const timestamp = internal('@timestamp');
     const message = internal(MESSAGE_FIELD);
     const logGroup = internal(LOG_FIELD);
     const logStream = internal(LOG_STREAM_FIELD);
@@ -181,10 +185,42 @@ export function framesToRows(
         message: stringValue(message?.values[i]),
         logGroup: stringValue(logGroup?.values[i]),
         logStream: stringValue(logStream?.values[i]),
+        timestamp: typeof timestamp?.values[i] === 'number' ? timestamp.values[i] : undefined,
       });
     }
   }
-  return { fields, timeFields: Array.from(timeFields), rows, details };
+  return { fields, timeFields: Array.from(timeFields), rows, details, stats };
+}
+
+/**
+ * Grafana sorts every logs frame by time ascending, which drops the query's own `sort`, and frames
+ * from several regions arrive one after another. Re-apply the query's sort to the merged rows.
+ */
+export function applyQuerySort<T extends Pick<QueryResult, 'rows' | 'details'>>(result: T, query: string): T {
+  const keys = parseSort(query);
+  if (keys.length === 0) {
+    return result;
+  }
+  const order = sortOrder(result.rows.length, keys, (i, field) =>
+    field === '@timestamp' ? result.details[i]?.timestamp : result.rows[i][field]
+  );
+  return { ...result, rows: order.map((i) => result.rows[i]), details: order.map((i) => result.details[i]) };
+}
+
+const STAT_KEYS: Record<string, keyof QueryStats> = {
+  'Bytes scanned': 'bytesScanned',
+  'Records scanned': 'recordsScanned',
+  'Records matched': 'recordsMatched',
+};
+
+/** Sums the GetQueryResults statistics Grafana puts in frame meta (one frame per region). */
+function addStats(stats: QueryStats, frame: DataFrame) {
+  for (const stat of frame.meta?.stats ?? []) {
+    const key = STAT_KEYS[stat.displayName ?? ''];
+    if (key && typeof stat.value === 'number') {
+      stats[key] = (stats[key] ?? 0) + stat.value;
+    }
+  }
 }
 
 function stringValue(value: unknown): string | undefined {

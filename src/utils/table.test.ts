@@ -1,4 +1,19 @@
-import { Row, fullLog, moveColumn, orderColumns, splitMatches, valueCounts, visibleColumns } from './table';
+import {
+  Row,
+  addQueryStage,
+  estimateWidth,
+  fullLog,
+  histogram,
+  isMonoColumn,
+  moveColumn,
+  orderColumns,
+  parseSort,
+  queryFilter,
+  sortOrder,
+  splitMatches,
+  valueCounts,
+  visibleColumns,
+} from './table';
 
 describe('table utils', () => {
   it('keeps the remembered column order and appends new fields', () => {
@@ -49,5 +64,70 @@ describe('table utils', () => {
     });
     expect(fullLog(row, { message: 'plain text' })).toEqual({ severity: 'Info', '@message': 'plain text' });
     expect(fullLog(row, undefined)).toEqual(row);
+  });
+});
+
+describe('query helpers', () => {
+  it('builds filter clauses', () => {
+    expect(queryFilter('severity', 'Info', false)).toBe('filter severity = "Info"');
+    expect(queryFilter('kubernetes.pod_name', 'a"b', true)).toBe('filter kubernetes.pod_name != "a\\"b"');
+    expect(queryFilter('status code', 200, false)).toBe('filter `status code` = 200');
+    expect(queryFilter('x', null, false)).toBe('filter isempty(x)');
+  });
+
+  it('inserts the clause before sort and limit', () => {
+    expect(addQueryStage('fields a\n| sort @timestamp desc\n| limit 20', 'filter a = 1')).toBe(
+      'fields a\n| filter a = 1\n| sort @timestamp desc\n| limit 20'
+    );
+    expect(addQueryStage('fields a, b | limit 50', 'filter a = 1')).toBe('fields a, b\n| filter a = 1\n| limit 50');
+    expect(addQueryStage('fields a', 'filter a = 1')).toBe('fields a\n| filter a = 1');
+  });
+});
+
+describe('column heuristics', () => {
+  it('spots id-like and numeric columns', () => {
+    expect(isMonoColumn(['6441', '6442', ''])).toBe(true);
+    expect(isMonoColumn(['d61a2133-626b-4e26-8da8-b98d7535681a'])).toBe(true);
+    expect(isMonoColumn(['2026-10-09T20:27:36.059563355Z'])).toBe(true);
+    expect(isMonoColumn(['Info', 'Debug'])).toBe(false);
+  });
+
+  it('sizes columns from their content within limits', () => {
+    expect(estimateWidth('userId', ['6441'])).toBe(92);
+    expect(estimateWidth('message', ['x'.repeat(500)])).toBe(420);
+  });
+});
+
+describe('histogram', () => {
+  it('counts points per bin and group', () => {
+    const bins = histogram(
+      [
+        { time: 0, group: 'info' },
+        { time: 5, group: 'error' },
+        { time: 10, group: 'info' },
+      ],
+      0,
+      10,
+      2
+    );
+    expect(bins.map((b) => b.total)).toEqual([1, 2]);
+    expect(bins[1].counts).toEqual({ error: 1, info: 1 });
+  });
+});
+
+describe('sorting', () => {
+  it('reads the last sort command', () => {
+    expect(parseSort('fields a | sort @timestamp desc | limit 5')).toEqual([{ field: '@timestamp', desc: true }]);
+    expect(parseSort('stats count(*) as n by x\n| sort n desc, x')).toEqual([
+      { field: 'n', desc: true },
+      { field: 'x', desc: false },
+    ]);
+    expect(parseSort('fields a | limit 5')).toEqual([]);
+  });
+
+  it('orders numbers numerically and puts missing values last', () => {
+    const values = ['10', '9', undefined, '100'];
+    expect(sortOrder(4, [{ field: 'n', desc: true }], (i) => values[i])).toEqual([3, 0, 1, 2]);
+    expect(sortOrder(4, [{ field: 'n', desc: false }], (i) => values[i])).toEqual([1, 0, 3, 2]);
   });
 });
