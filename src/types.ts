@@ -76,4 +76,6 @@ export interface PersistedState {
 export interface AppSettings {
   datasourceUid?: string;
   defaultRegion?: string;
+  /** USD per GB scanned, for the cost estimate next to each result. */
+  costPerGb?: number;
 }

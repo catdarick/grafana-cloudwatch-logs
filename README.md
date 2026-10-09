@@ -22,6 +22,8 @@ Requires **Grafana 10.4** or later.
   the query's last `sort` to the returned rows (including rows merged from several regions).
 - The histogram above the table is built from the loaded rows (free); selecting or clicking bars narrows
   the loaded rows without a new query. "Run for this range" runs the query for that range. The +/− actions in the expanded JSON add a `filter` to the query and re-run it.
+- Next to "Scanned …" is an estimate of the query's cost: GB scanned × price per GB (default $0.005,
+  set in the plugin settings). AWS does not report the cost, so this is an estimate from the list price.
 - Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
   the whole log (the JSON in `@message`), not just the query's fields. `stats` queries and queries with `display` lack it,
   and the row's fields are shown instead.

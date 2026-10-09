@@ -8,6 +8,7 @@ import { useWorkspace } from '../../state/useWorkspace';
 import { PLUGIN_BASE_URL } from '../../constants';
 import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
+import { DEFAULT_COST_PER_GB, estimateCost, formatCost } from '../../utils/cost';
 import { addQueryStage } from '../../utils/table';
 import { SHARE_PARAM_KEYS, fromShareParams, toShareParams } from '../../utils/shareLink';
 import { formatTime, isValidRange, toEpochRange, zoneLabel } from '../../utils/timeRange';
@@ -253,7 +254,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
                 {zoneLabel(result.from, ws.state.timeZone)}
               </span>
-              {statsParts(result).map((part) => (
+              {statsParts(result, settings.costPerGb ?? DEFAULT_COST_PER_GB).map((part) => (
                 <span key={part} className={s.stat}>
                   {part}
                 </span>
@@ -287,12 +288,13 @@ function App({ meta }: AppRootProps<AppSettings>) {
 
 export default App;
 
-/** "2.3s", "Scanned 1.2 GB", "48,312 records", "50 matched": what the query cost and found. */
-function statsParts(result: QueryResult): string[] {
+/** "2.3s", "Scanned 1.2 GB", "≈ $0.0058", "48,312 records", "50 matched": what the query cost and found. */
+function statsParts(result: QueryResult, costPerGb: number): string[] {
   const { bytesScanned, recordsScanned, recordsMatched } = result.stats ?? {};
   return [
     `${(result.durationMs / 1000).toFixed(1)}s`,
     bytesScanned !== undefined ? `Scanned ${formatBytes(bytesScanned)}` : '',
+    bytesScanned !== undefined ? formatCost(estimateCost(bytesScanned, costPerGb)) : '',
     recordsScanned !== undefined ? `${Math.round(recordsScanned).toLocaleString('en-US')} records` : '',
     recordsMatched !== undefined ? `${Math.round(recordsMatched).toLocaleString('en-US')} matched` : '',
   ].filter(Boolean);

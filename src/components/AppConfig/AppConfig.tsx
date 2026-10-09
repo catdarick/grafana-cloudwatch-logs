@@ -4,6 +4,7 @@ import { AppPluginMeta, PluginConfigPageProps, PluginMeta } from '@grafana/data'
 import { DataSourcePicker, getBackendSrv } from '@grafana/runtime';
 import { Button, Field, FieldSet, Input } from '@grafana/ui';
 import { AppSettings } from '../../types';
+import { DEFAULT_COST_PER_GB } from '../../utils/cost';
 import { testIds } from '../testIds';
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AppSettings>> {}
@@ -12,13 +13,18 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const { enabled, pinned, jsonData } = plugin.meta;
   const [datasourceUid, setDatasourceUid] = useState(jsonData?.datasourceUid);
   const [defaultRegion, setDefaultRegion] = useState(jsonData?.defaultRegion ?? '');
+  const [costPerGb, setCostPerGb] = useState(jsonData?.costPerGb !== undefined ? String(jsonData.costPerGb) : '');
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     updatePluginAndReload(plugin.meta.id, {
       enabled,
       pinned,
-      jsonData: { datasourceUid, defaultRegion: defaultRegion.trim() || undefined },
+      jsonData: {
+        datasourceUid,
+        defaultRegion: defaultRegion.trim() || undefined,
+        costPerGb: Number(costPerGb) > 0 ? Number(costPerGb) : undefined,
+      },
     });
   };
 
@@ -45,6 +51,20 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             value={defaultRegion}
             placeholder="us-east-2"
             onChange={(e) => setDefaultRegion(e.currentTarget.value)}
+          />
+        </Field>
+        <Field
+          label="Price per GB scanned, USD"
+          description={`Used for the cost estimate next to each result. Empty means ${DEFAULT_COST_PER_GB} (Logs Insights in us-east-1/us-east-2).`}
+        >
+          <Input
+            width={60}
+            type="number"
+            min={0}
+            step="any"
+            value={costPerGb}
+            placeholder={String(DEFAULT_COST_PER_GB)}
+            onChange={(e) => setCostPerGb(e.currentTarget.value)}
           />
         </Field>
         <Button type="submit" data-testid={testIds.appConfig.submit}>
