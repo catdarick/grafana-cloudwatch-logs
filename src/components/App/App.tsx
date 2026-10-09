@@ -6,7 +6,7 @@ import { Alert, Button, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
 import { AppSettings, QueryResult } from '../../types';
-import { describeTimeRange, formatTime, isValidRange, toEpochRange } from '../../utils/timeRange';
+import { formatTime, isValidRange, toEpochRange, zoneLabel } from '../../utils/timeRange';
 import { LogGroups } from '../LogGroups/LogGroups';
 import { QueryEditor } from '../QueryEditor/QueryEditor';
 import { ResultsTable } from '../Results/ResultsTable';
@@ -142,7 +142,12 @@ function App({ meta }: AppRootProps<AppSettings>) {
           />
           <section className={s.timeColumn}>
             <h5 className={s.title}>Time range</h5>
-            <TimeRangePicker value={tab.timeRange} onChange={(timeRange) => ws.updateTab(tab.id, { timeRange })} />
+            <TimeRangePicker
+              value={tab.timeRange}
+              timeZone={ws.state.timeZone}
+              onChange={(timeRange) => ws.updateTab(tab.id, { timeRange })}
+              onTimeZoneChange={ws.setTimeZone}
+            />
             {running[tab.id] ? (
               <Button
                 size="lg"
@@ -171,10 +176,10 @@ function App({ meta }: AppRootProps<AppSettings>) {
         {result && !result.error && (
           <section className={s.results}>
             <div className={s.meta}>
-              {describeTimeRange(tab.timeRange)} · {formatTime(result.from)} → {formatTime(result.to)} ·{' '}
-              {(result.durationMs / 1000).toFixed(1)}s
+              {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
+              {zoneLabel(result.from, ws.state.timeZone)} · {(result.durationMs / 1000).toFixed(1)}s
             </div>
-            <ResultsTable key={result.ranAt} result={result} />
+            <ResultsTable key={result.ranAt} result={result} timeZone={ws.state.timeZone} />
           </section>
         )}
       </div>

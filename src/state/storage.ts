@@ -16,6 +16,7 @@ export function loadState(): PersistedState | undefined {
       activeTabId: parsed.activeTabId ?? parsed.tabs[0].id,
       favorites: parsed.favorites ?? [],
       savedQueries: parsed.savedQueries ?? [],
+      timeZone: parsed.timeZone ?? 'utc',
     };
   } catch {
     return undefined;

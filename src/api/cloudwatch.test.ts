@@ -18,8 +18,9 @@ describe('framesToRows', () => {
   });
 
   it('keeps @timestamp when the query asks for it', () => {
-    const { fields, rows } = framesToRows([frame], 'fields @timestamp, message');
+    const { fields, rows, timeFields } = framesToRows([frame], 'fields @timestamp, message');
     expect(fields[0]).toBe('@timestamp');
-    expect(rows[0]['@timestamp']).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
+    expect(timeFields).toEqual(['@timestamp']);
+    expect(rows[0]['@timestamp']).toBe('1760000000000');
   });
 });

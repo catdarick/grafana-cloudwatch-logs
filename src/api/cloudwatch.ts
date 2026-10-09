@@ -1,5 +1,5 @@
 import { Subscription } from 'rxjs';
-import { DataFrame, FieldType, dateTimeFormat } from '@grafana/data';
+import { DataFrame, FieldType } from '@grafana/data';
 import {
   BackendDataSourceResponse,
   BackendSrvRequest,
@@ -127,10 +127,11 @@ function groupByRegion(groups: LogGroupRef[]): Map<string, LogGroupRef[]> {
   return map;
 }
 
-export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResult, 'fields' | 'rows'> {
+export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResult, 'fields' | 'timeFields' | 'rows'> {
   // Grafana prepends "fields @timestamp" to every query; hide it unless the user asked for it.
   const showTimestamp = query.includes('@timestamp');
   const fields: string[] = [];
+  const timeFields = new Set<string>();
   const rows: Array<Record<string, string>> = [];
 
   for (const frame of frames) {
@@ -141,6 +142,9 @@ export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResu
       if (!fields.includes(f.name)) {
         fields.push(f.name);
       }
+      if (f.type === FieldType.time) {
+        timeFields.add(f.name);
+      }
     }
     for (let i = 0; i < frame.length; i++) {
       const row: Record<string, string> = {};
@@ -149,13 +153,12 @@ export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResu
         if (value === null || value === undefined || value === '') {
           continue;
         }
-        row[f.name] =
-          f.type === FieldType.time ? dateTimeFormat(value, { format: 'YYYY-MM-DD HH:mm:ss.SSS' }) : String(value);
+        row[f.name] = String(value);
       }
       rows.push(row);
     }
   }
-  return { fields, rows };
+  return { fields, timeFields: Array.from(timeFields), rows };
 }
 
 interface LogGroupFieldsResponseItem {

@@ -26,7 +26,7 @@ function initialState(): PersistedState {
     return stored;
   }
   const tab = createTab(1);
-  return { tabs: [tab], activeTabId: tab.id, favorites: [], savedQueries: [] };
+  return { tabs: [tab], activeTabId: tab.id, favorites: [], savedQueries: [], timeZone: 'utc' };
 }
 
 export const sameGroup = (a: LogGroupRef, b: LogGroupRef) => a.name === b.name && a.region === b.region;
@@ -86,7 +86,20 @@ export function useWorkspace() {
     setState((s) => ({ ...s, savedQueries: s.savedQueries.filter((q) => q.name !== name) }));
   }, []);
 
-  return { state, activeTab, updateTab, addTab, closeTab, selectTab, toggleFavorite, saveQuery, deleteQuery };
+  const setTimeZone = useCallback((timeZone: string) => setState((s) => ({ ...s, timeZone })), []);
+
+  return {
+    state,
+    activeTab,
+    setTimeZone,
+    updateTab,
+    addTab,
+    closeTab,
+    selectTab,
+    toggleFavorite,
+    saveQuery,
+    deleteQuery,
+  };
 }
 
 function nextTabNumber(tabs: QueryTab[]) {

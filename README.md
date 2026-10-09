@@ -23,7 +23,8 @@ src/
   api/cloudwatch.ts            data source queries, frame parsing
   state/useWorkspace.ts        tabs, favorites, saved queries (+ localStorage)
   components/App/App.tsx       the whole page
-  components/TimeRangePicker/  the ported time range picker
+  components/TimeRangePicker/  the ported time range picker + time zone
+  utils/parseTime.ts           parsing pasted times (ISO, epoch, DD.MM.YYYY, now-1h, ranges)
   components/LogGroups/        favorite and searchable log groups
   components/QueryEditor/      editor (Monaco) + saved queries
   language/logsInsights.ts     Logs Insights syntax highlighting

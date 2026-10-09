@@ -1,11 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
+import type { TimeZone } from '@grafana/schema';
 import { FilterInput, IconButton, useStyles2 } from '@grafana/ui';
 import { QueryResult } from '../../types';
+import { formatTime } from '../../utils/timeRange';
 
 interface Props {
   result: QueryResult;
+  timeZone: TimeZone;
 }
 
 const PAGE = 500;
@@ -30,20 +33,35 @@ function rowLevel(row: Record<string, string>, levelField?: string): Level {
   return undefined;
 }
 
-export function ResultsTable({ result }: Props) {
+export function ResultsTable({ result, timeZone }: Props) {
   const s = useStyles2(getStyles);
   const [filter, setFilter] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [shown, setShown] = useState(PAGE);
 
+  // Time fields arrive as epoch millis; show them in the selected zone.
+  const displayRows = useMemo(
+    () =>
+      result.rows.map((row) => {
+        const out = { ...row };
+        for (const f of result.timeFields) {
+          if (out[f] !== undefined) {
+            out[f] = formatTime(Number(out[f]), timeZone, 'YYYY-MM-DD HH:mm:ss.SSS');
+          }
+        }
+        return out;
+      }),
+    [result, timeZone]
+  );
+
   const rows = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    const indexed = result.rows.map((row, index) => ({ row, index }));
+    const indexed = displayRows.map((row, index) => ({ row, index }));
     if (!needle) {
       return indexed;
     }
     return indexed.filter(({ row }) => Object.values(row).some((v) => v.toLowerCase().includes(needle)));
-  }, [result.rows, filter]);
+  }, [displayRows, filter]);
 
   const levelField = result.fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
 

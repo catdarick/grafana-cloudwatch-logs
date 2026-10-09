@@ -15,6 +15,8 @@ export interface QueryResult {
   from: number;
   to: number;
   fields: string[];
+  /** Fields holding epoch millis; formatted in the selected time zone when shown. */
+  timeFields: string[];
   rows: Array<Record<string, string>>;
   error?: string;
 }
@@ -39,6 +41,8 @@ export interface PersistedState {
   activeTabId: string;
   favorites: LogGroupRef[];
   savedQueries: SavedQuery[];
+  /** Grafana time zone id: "utc", "browser" or an IANA name. */
+  timeZone: string;
 }
 
 export interface AppSettings {
