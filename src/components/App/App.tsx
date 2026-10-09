@@ -204,7 +204,6 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 onCopyLink={copyLink}
               />
               <section className={s.timeColumn}>
-                <h5 className={s.title}>Time range</h5>
                 <TimeRangePicker
                   key={tab.id}
                   value={tab.timeRange}
@@ -347,7 +346,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   // Same size whatever the picker above shows (Relative grid or Absolute fields).
   // Pinned to the bottom of the column so it does not move when the picker above changes height.
   runButton: css({ flex: '0 0 auto', height: theme.spacing(6), marginTop: 'auto' }),
-  title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
   meta: css({
