@@ -2,16 +2,16 @@ import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
-import { Input, RadioButtonGroup, TimeZonePicker, useStyles2 } from '@grafana/ui';
+import { Input, RadioButtonGroup, useStyles2 } from '@grafana/ui';
 import { TimeRangeValue } from '../../types';
 import { parseRangeInput, parseTimeInput } from '../../utils/parseTime';
 import { AMOUNTS, UNITS, formatTime, toEpochRange, zoneLabel } from '../../utils/timeRange';
 
 interface Props {
   value: TimeRangeValue;
+  /** Zone used to read and show absolute times; chosen in the page's top bar. */
   timeZone: TimeZone;
   onChange: (value: TimeRangeValue) => void;
-  onTimeZoneChange: (timeZone: TimeZone) => void;
 }
 
 const MODES = [
@@ -20,7 +20,7 @@ const MODES = [
 ];
 
 /** Relative/absolute picker with quick buttons, ported from the VS Code extension. */
-export function TimeRangePicker({ value, timeZone, onChange, onTimeZoneChange }: Props) {
+export function TimeRangePicker({ value, timeZone, onChange }: Props) {
   const s = useStyles2(getStyles);
 
   const onModeChange = (mode: TimeRangeValue['mode']) => {
@@ -38,10 +38,6 @@ export function TimeRangePicker({ value, timeZone, onChange, onTimeZoneChange }:
   return (
     <div className={s.container}>
       <RadioButtonGroup fullWidth options={MODES} value={value.mode} onChange={onModeChange} />
-      <div className={s.zoneRow}>
-        <span className={s.absLabel}>Time zone</span>
-        <TimeZonePicker includeInternal value={timeZone} onChange={(tz) => onTimeZoneChange(tz ?? 'utc')} />
-      </div>
       {value.mode === 'relative' ? (
         <div className={s.relative}>
           <span className={s.last}>Last</span>
@@ -196,7 +192,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
   absolute: css({ display: 'grid', gridTemplateColumns: 'auto 1fr', alignItems: 'start', gap: theme.spacing(1) }),
   absLabel: css({ color: theme.colors.text.secondary, margin: 0, lineHeight: theme.spacing(4) }),
   absField: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), minWidth: 0 }),
-  zoneRow: css({ display: 'grid', gridTemplateColumns: 'auto 1fr', alignItems: 'center', gap: theme.spacing(1) }),
   zone: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
   preview: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
   error: css({ color: theme.colors.error.text, fontSize: theme.typography.bodySmall.fontSize, gridColumn: '2' }),

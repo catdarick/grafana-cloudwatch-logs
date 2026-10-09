@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { css } from '@emotion/css';
 import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, getDataSourceSrv } from '@grafana/runtime';
-import { Alert, Button, useStyles2 } from '@grafana/ui';
+import { Alert, Button, TimeZonePicker, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
 import { AppSettings, QueryResult } from '../../types';
@@ -110,6 +110,14 @@ function App({ meta }: AppRootProps<AppSettings>) {
             onAdd={() => ws.addTab(tab)}
             onRename={(id, title) => ws.updateTab(id, { title })}
           />
+          <div title="Time zone for absolute times and results">
+            <TimeZonePicker
+              includeInternal
+              width={28}
+              value={ws.state.timeZone}
+              onChange={(tz) => ws.setTimeZone(tz ?? 'utc')}
+            />
+          </div>
           <DataSourcePicker
             pluginId="cloudwatch"
             current={datasourceUid ?? null}
@@ -146,7 +154,6 @@ function App({ meta }: AppRootProps<AppSettings>) {
               value={tab.timeRange}
               timeZone={ws.state.timeZone}
               onChange={(timeRange) => ws.updateTab(tab.id, { timeRange })}
-              onTimeZoneChange={ws.setTimeZone}
             />
             {running[tab.id] ? (
               <Button
