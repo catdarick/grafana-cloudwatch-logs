@@ -343,19 +343,16 @@ export function ResultsTable({
     return highlight(value, index);
   };
 
-  const exportCsv = ({ rows: which, fields, raw }: ExportChoice) => {
+  const exportCsv = ({ rows: which, fields }: ExportChoice) => {
     const indexes = which === 'shown' ? rows : displayRows.map((_, i) => i);
-    const data = indexes.map((i) =>
-      raw
-        ? {
-            ...displayRows[i],
-            '@message': result.details[i]?.message,
-            '@log': result.details[i]?.logGroup,
-            '@logStream': result.details[i]?.logStream,
-          }
-        : displayRows[i]
-    );
-    const header = raw ? [...fields.filter((f) => f !== '@message'), '@message', '@log', '@logStream'] : fields;
+    // Raw parts of the log event come from the row details; the rest are table values as shown.
+    const data = indexes.map((i) => ({
+      '@message': result.details[i]?.message,
+      '@log': result.details[i]?.logGroup,
+      '@logStream': result.details[i]?.logStream,
+      ...displayRows[i],
+    }));
+    const header = fields;
     const stamp = formatTime(Date.now(), timeZone, 'YYYYMMDD-HHmmss');
     const safeName = exportName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'logs';
     downloadCsv(`${safeName}-${stamp}.csv`, toCsv(header, data));

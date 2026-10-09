@@ -22,9 +22,9 @@ Requires **Grafana 10.4** or later.
   the query's last `sort` to the returned rows (including rows merged from several regions).
 - The histogram above the table is built from the loaded rows (free); selecting or clicking bars narrows
   the loaded rows without a new query. "Run for this range" runs the query for that range. The +/− actions in the expanded JSON add a `filter` to the query and re-run it.
-- "Export CSV" above the table: if filters, search or zoom hide some rows, first choose "shown / all
-  loaded", then the columns (visible, all, or hand-picked) and an "add the raw log" checkbox (`@message`, `@log`,
-  `@logStream`). Times in the selected zone, UTF-8 with a BOM.
+- "Export CSV" above the table opens one dialog: which rows (shown or all loaded; only asked when filters,
+  search or zoom hide some), which columns (the visible ones by default) and which parts of the raw log (`@message`,
+  `@log`, `@logStream`). Times in the selected zone, UTF-8 with a BOM.
 - Next to "Scanned …" is an estimate of the query's cost: GB scanned × price per GB (default $0.005,
   set in the plugin settings). AWS does not report the cost, so this is an estimate from the list price.
 - Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
