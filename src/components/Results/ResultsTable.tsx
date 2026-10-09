@@ -183,11 +183,26 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
     return { view, gap, bins: loaded.to > loaded.from ? histogram(points, loaded.from, loaded.to, count) : [] };
   }, [rows, result, displayRows, levelField, zoom, unloaded]);
 
-  const matched = result.stats?.recordsMatched;
-  const caption =
-    matched !== undefined && matched > result.rows.length
-      ? `${result.rows.length.toLocaleString('en-US')} of ${Math.round(matched).toLocaleString('en-US')} matched logs`
-      : undefined;
+  // What the bars stand for. Without zoom: loaded vs matched for the whole query. With zoom we only
+  // know the loaded count in the window, and whether the window reaches into the cut-off part.
+  const caption = useMemo(() => {
+    const matched = result.stats?.recordsMatched;
+    const truncated = matched !== undefined && matched > result.rows.length;
+    if (!zoom) {
+      return truncated
+        ? `${result.rows.length.toLocaleString('en-US')} of ${Math.round(matched).toLocaleString('en-US')} matched logs`
+        : undefined;
+    }
+    if (!truncated) {
+      return undefined;
+    }
+    const loaded = inZoom.filter(Boolean).length.toLocaleString('en-US');
+    if (histo?.gap) {
+      return `${loaded} loaded logs here, more in the hatched part`;
+    }
+    // Sorted by time, so everything matched in a window outside the cut-off part is loaded.
+    return unloaded ? undefined : `${loaded} loaded logs here, the range may have more`;
+  }, [result, zoom, inZoom, histo, unloaded]);
 
   // No React Compiler here anyway; the virtualizer is re-read on every render by design.
   // eslint-disable-next-line react-hooks/incompatible-library
