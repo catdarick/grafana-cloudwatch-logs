@@ -14,7 +14,10 @@ Requires **Grafana 10.4** or later.
 - Log groups for search: `GET /api/datasources/uid/<uid>/resources/log-groups`.
 - Groups from different regions go out as separate queries and their rows are merged.
 - Tabs, favorites and saved queries are kept in the browser's `localStorage` (10.4 has no user storage API).
-  Results live only in the tab's memory.
+  Results live only in the tab's memory. Column settings (order, hidden, widths) are kept in the tab.
+- Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
+  the whole log (the JSON in `@message`), not just the query's fields. `stats` queries and queries with `display` lack it,
+  and the row's fields are shown instead.
 
 ## Layout
 
@@ -29,7 +32,8 @@ src/
   components/QueryEditor/      editor (Monaco) + saved queries
   language/logsInsights.ts     Logs Insights syntax highlighting
   components/Tabs/             tabs
-  components/Results/          results table with a filter and expandable rows
+  components/Results/          results table: columns, value filters, search, full log
+  utils/table.ts               column order, value counts, search, full log parsing
   components/AppConfig/        settings page (default data source and region)
 ```
 

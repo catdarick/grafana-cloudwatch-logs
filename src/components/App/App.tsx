@@ -186,7 +186,13 @@ function App({ meta }: AppRootProps<AppSettings>) {
               {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
               {zoneLabel(result.from, ws.state.timeZone)} · {(result.durationMs / 1000).toFixed(1)}s
             </div>
-            <ResultsTable key={result.ranAt} result={result} timeZone={ws.state.timeZone} />
+            <ResultsTable
+              key={result.ranAt}
+              result={result}
+              timeZone={ws.state.timeZone}
+              columns={tab.columns ?? {}}
+              onColumnsChange={(columns) => ws.updateTab(tab.id, { columns })}
+            />
           </section>
         )}
       </div>

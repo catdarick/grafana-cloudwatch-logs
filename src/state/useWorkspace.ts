@@ -17,6 +17,7 @@ export function createTab(index: number, from?: QueryTab): QueryTab {
     logGroups: from?.logGroups ?? [],
     timeRange: from?.timeRange ?? DEFAULT_TIME_RANGE,
     savedQueryName: from?.savedQueryName,
+    columns: from?.columns,
   };
 }
 

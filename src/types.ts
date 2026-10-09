@@ -18,7 +18,23 @@ export interface QueryResult {
   /** Fields holding epoch millis; formatted in the selected time zone when shown. */
   timeFields: string[];
   rows: Array<Record<string, string>>;
+  /** Per row: the whole log event, which the query's own fields may not include. */
+  details: LogDetails[];
   error?: string;
+}
+
+export interface LogDetails {
+  /** Raw @message; absent for stats queries or queries ending in display. */
+  message?: string;
+  logGroup?: string;
+  logStream?: string;
+}
+
+/** Table layout per tab, keyed by field name so it survives re-running the query. */
+export interface ColumnSettings {
+  order?: string[];
+  hidden?: string[];
+  widths?: Record<string, number>;
 }
 
 export interface QueryTab {
@@ -28,6 +44,7 @@ export interface QueryTab {
   logGroups: LogGroupRef[];
   timeRange: TimeRangeValue;
   savedQueryName?: string;
+  columns?: ColumnSettings;
 }
 
 export interface SavedQuery {

@@ -7,10 +7,23 @@ import {
   getBackendSrv,
   toDataQueryResponse,
 } from '@grafana/runtime';
-import { LogGroupRef, QueryResult } from '../types';
+import { LogDetails, LogGroupRef, QueryResult } from '../types';
 
 // Fields Grafana adds to every Logs Insights query (see pkg/tsdb/cloudwatch/log_actions.go).
 const INTERNAL_FIELD_SUFFIX = '__grafana_internal__';
+const LOG_FIELD = '__log__grafana_internal__';
+const LOG_STREAM_FIELD = '__logstream__grafana_internal__';
+// Our own addition, named like Grafana's so it is hidden the same way.
+const MESSAGE_FIELD = '__message__grafana_internal__';
+
+/**
+ * Asks for the raw @message alongside whatever the query selects, so an expanded row can show the
+ * whole log event. Logs Insights keeps fields from every `fields` command, the same thing Grafana
+ * relies on when it prepends @log and @logStream.
+ */
+export function withMessageField(query: string): string {
+  return `fields @message as ${MESSAGE_FIELD}\n| ${query}`;
+}
 
 interface LogGroupsResponseItem {
   value: { arn: string; name: string };
@@ -56,7 +69,7 @@ export async function runLogsQuery(args: RunQueryArgs): Promise<QueryResult> {
     queryMode: 'Logs',
     region,
     id: '',
-    expression: args.query,
+    expression: withMessageField(args.query),
     logGroupNames: groups.map((g) => g.name),
     // Only used when cross-account querying is enabled; requires every group to have an ARN.
     ...(groups.every((g) => g.arn) ? { logGroups: groups.map((g) => ({ arn: g.arn, name: g.name })) } : {}),
@@ -127,14 +140,22 @@ function groupByRegion(groups: LogGroupRef[]): Map<string, LogGroupRef[]> {
   return map;
 }
 
-export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResult, 'fields' | 'timeFields' | 'rows'> {
+export function framesToRows(
+  frames: DataFrame[],
+  query: string
+): Pick<QueryResult, 'fields' | 'timeFields' | 'rows' | 'details'> {
   // Grafana prepends "fields @timestamp" to every query; hide it unless the user asked for it.
   const showTimestamp = query.includes('@timestamp');
   const fields: string[] = [];
   const timeFields = new Set<string>();
   const rows: Array<Record<string, string>> = [];
+  const details: LogDetails[] = [];
 
   for (const frame of frames) {
+    const internal = (name: string) => frame.fields.find((f) => f.name === name);
+    const message = internal(MESSAGE_FIELD);
+    const logGroup = internal(LOG_FIELD);
+    const logStream = internal(LOG_STREAM_FIELD);
     const visible = frame.fields.filter(
       (f) => !f.name.endsWith(INTERNAL_FIELD_SUFFIX) && (showTimestamp || f.name !== '@timestamp')
     );
@@ -156,9 +177,18 @@ export function framesToRows(frames: DataFrame[], query: string): Pick<QueryResu
         row[f.name] = String(value);
       }
       rows.push(row);
+      details.push({
+        message: stringValue(message?.values[i]),
+        logGroup: stringValue(logGroup?.values[i]),
+        logStream: stringValue(logStream?.values[i]),
+      });
     }
   }
-  return { fields, timeFields: Array.from(timeFields), rows };
+  return { fields, timeFields: Array.from(timeFields), rows, details };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return value === null || value === undefined || value === '' ? undefined : String(value);
 }
 
 interface LogGroupFieldsResponseItem {

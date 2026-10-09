@@ -1,11 +1,12 @@
 import { FieldType, toDataFrame } from '@grafana/data';
-import { framesToRows } from './cloudwatch';
+import { framesToRows, withMessageField } from './cloudwatch';
 
 describe('framesToRows', () => {
   const frame = toDataFrame({
     fields: [
       { name: '@timestamp', type: FieldType.time, values: [1760000000000, 1760000001000] },
       { name: '__log__grafana_internal__', type: FieldType.string, values: ['g', 'g'] },
+      { name: '__message__grafana_internal__', type: FieldType.string, values: ['{"a":1}', null] },
       { name: 'message', type: FieldType.string, values: ['hello', 'world'] },
       { name: 'userId', type: FieldType.string, values: ['42', null] },
     ],
@@ -15,6 +16,20 @@ describe('framesToRows', () => {
     const { fields, rows } = framesToRows([frame], 'fields message, userId');
     expect(fields).toEqual(['message', 'userId']);
     expect(rows).toEqual([{ message: 'hello', userId: '42' }, { message: 'world' }]);
+  });
+
+  it('keeps the raw message and log group per row', () => {
+    const { details } = framesToRows([frame], 'fields message');
+    expect(details).toEqual([
+      { message: '{"a":1}', logGroup: 'g', logStream: undefined },
+      { message: undefined, logGroup: 'g', logStream: undefined },
+    ]);
+  });
+
+  it('prepends the message field to the query', () => {
+    expect(withMessageField('fields a | limit 5')).toBe(
+      'fields @message as __message__grafana_internal__\n| fields a | limit 5'
+    );
   });
 
   it('keeps @timestamp when the query asks for it', () => {
