@@ -323,6 +323,40 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
 
   return (
     <div className={s.wrapper}>
+      {zoom && (
+        <div className={s.zoomBar}>
+          <Icon name="search-plus" />
+          <span>
+            Showing loaded logs from {formatTime(zoom.from, timeZone, 'YYYY-MM-DD HH:mm:ss')} to{' '}
+            {formatTime(zoom.to, timeZone, 'HH:mm:ss')}
+          </span>
+          <Button size="sm" variant="secondary" fill="text" icon="times" onClick={() => setZoom(undefined)}>
+            Reset zoom
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            fill="text"
+            icon="sync"
+            tooltip="Only loaded rows are shown. Run the query for this range to get everything in it."
+            onClick={() => onRunRange(zoom.from, zoom.to)}
+          >
+            Run for this range
+          </Button>
+        </div>
+      )}
+      {histo && (
+        <Histogram
+          view={histo.view}
+          bins={histo.bins}
+          gap={histo.gap}
+          timeZone={timeZone}
+          onZoom={(from, to) => setZoom({ from, to })}
+          caption={caption}
+          onRunRange={onRunRange}
+        />
+      )}
+
       <div className={s.toolbar}>
         <div className={s.search}>
           <Input
@@ -384,40 +418,6 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
         )}
         <ColumnsPicker fields={result.fields} settings={columns} onChange={onColumnsChange} />
       </div>
-
-      {zoom && (
-        <div className={s.zoomBar}>
-          <Icon name="search-plus" />
-          <span>
-            Showing loaded logs from {formatTime(zoom.from, timeZone, 'YYYY-MM-DD HH:mm:ss')} to{' '}
-            {formatTime(zoom.to, timeZone, 'HH:mm:ss')}
-          </span>
-          <Button size="sm" variant="secondary" fill="text" icon="times" onClick={() => setZoom(undefined)}>
-            Reset zoom
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            fill="text"
-            icon="sync"
-            tooltip="Only loaded rows are shown. Run the query for this range to get everything in it."
-            onClick={() => onRunRange(zoom.from, zoom.to)}
-          >
-            Run for this range
-          </Button>
-        </div>
-      )}
-      {histo && (
-        <Histogram
-          view={histo.view}
-          bins={histo.bins}
-          gap={histo.gap}
-          timeZone={timeZone}
-          onZoom={(from, to) => setZoom({ from, to })}
-          caption={caption}
-          onRunRange={onRunRange}
-        />
-      )}
 
       <div className={s.scroll} ref={scrollRef}>
         <table
