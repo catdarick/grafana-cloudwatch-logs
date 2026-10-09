@@ -3,7 +3,7 @@ import { css, cx } from '@emotion/css';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
-import { Button, Checkbox, ClipboardButton, Dropdown, Icon, IconButton, Input, Menu, useStyles2 } from '@grafana/ui';
+import { Button, Checkbox, ClipboardButton, Icon, IconButton, Input, useStyles2 } from '@grafana/ui';
 import { ColumnSettings, QueryResult } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
 import { downloadCsv, toCsv } from '../../utils/csv';
@@ -27,6 +27,7 @@ import {
 } from '../../utils/table';
 import { ColumnMenu } from './ColumnMenu';
 import { ColumnsPicker } from './ColumnsPicker';
+import { ExportChoice, ExportDialog } from './ExportDialog';
 import { Histogram } from './Histogram';
 import { JsonTree } from './JsonTree';
 
@@ -84,6 +85,7 @@ export function ResultsTable({
   const [filters, setFilters] = useState<ValueFilters>({});
   // Time window picked on the histogram; narrows the loaded rows without a new query.
   const [zoom, setZoom] = useState<{ from: number; to: number }>();
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState('');
   const [hideNonMatching, setHideNonMatching] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -341,11 +343,10 @@ export function ResultsTable({
     return highlight(value, index);
   };
 
-  const exportCsv = (what: 'shown' | 'all' | 'raw') => {
-    const fields = what === 'shown' ? cols : orderColumns(result.fields, columns);
-    const indexes = what === 'shown' ? rows : displayRows.map((_, i) => i);
+  const exportCsv = ({ rows: which, fields, raw }: ExportChoice) => {
+    const indexes = which === 'shown' ? rows : displayRows.map((_, i) => i);
     const data = indexes.map((i) =>
-      what === 'raw'
+      raw
         ? {
             ...displayRows[i],
             '@message': result.details[i]?.message,
@@ -354,11 +355,11 @@ export function ResultsTable({
           }
         : displayRows[i]
     );
-    const header =
-      what === 'raw' ? [...fields.filter((f) => f !== '@message'), '@message', '@log', '@logStream'] : fields;
+    const header = raw ? [...fields.filter((f) => f !== '@message'), '@message', '@log', '@logStream'] : fields;
     const stamp = formatTime(Date.now(), timeZone, 'YYYYMMDD-HHmmss');
     const safeName = exportName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'logs';
     downloadCsv(`${safeName}-${stamp}.csv`, toCsv(header, data));
+    setExporting(false);
   };
 
   const filterCount = Object.keys(filters).length;
@@ -462,32 +463,19 @@ export function ResultsTable({
             Clear {filterCount === 1 ? 'filter' : `${filterCount} filters`}
           </Button>
         )}
-        <Dropdown
-          placement="bottom-end"
-          overlay={
-            <Menu>
-              <Menu.Item
-                label={`Shown rows, visible columns (${rows.length})`}
-                description="After filters, search and zoom, as on screen"
-                onClick={() => exportCsv('shown')}
-              />
-              <Menu.Item
-                label={`All loaded rows, all fields (${total})`}
-                description="Ignores filters, search, zoom and hidden columns"
-                onClick={() => exportCsv('all')}
-              />
-              <Menu.Item
-                label={`All loaded rows with raw log (${total})`}
-                description="All fields plus @message, @log and @logStream"
-                onClick={() => exportCsv('raw')}
-              />
-            </Menu>
-          }
-        >
-          <Button size="sm" variant="secondary" icon="download-alt">
-            Export CSV
-          </Button>
-        </Dropdown>
+        <Button size="sm" variant="secondary" icon="download-alt" onClick={() => setExporting(true)}>
+          Export CSV
+        </Button>
+        {exporting && (
+          <ExportDialog
+            shownCount={rows.length}
+            totalCount={total}
+            allFields={orderColumns(result.fields, columns)}
+            visibleFields={cols}
+            onExport={exportCsv}
+            onDismiss={() => setExporting(false)}
+          />
+        )}
         <ColumnsPicker fields={result.fields} settings={columns} onChange={onColumnsChange} />
       </div>
 
