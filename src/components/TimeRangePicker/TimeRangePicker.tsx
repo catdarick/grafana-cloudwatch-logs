@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
-import { Input, RadioButtonGroup, useStyles2 } from '@grafana/ui';
+import { Input, useStyles2 } from '@grafana/ui';
 import { TimeRangeValue } from '../../types';
 import { parseRangeInput, parseTimeInput } from '../../utils/parseTime';
 import { AMOUNTS, UNITS, formatTime, toEpochRange, zoneLabel } from '../../utils/timeRange';
@@ -44,7 +44,20 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
 
   return (
     <div className={s.container}>
-      <RadioButtonGroup fullWidth options={MODES} value={value.mode} onChange={onModeChange} />
+      <div className={s.modes} role="radiogroup" aria-label="Time range mode">
+        {MODES.map((mode) => (
+          <button
+            key={mode.value}
+            type="button"
+            role="radio"
+            aria-checked={value.mode === mode.value}
+            className={cx(s.mode, value.mode === mode.value && s.selected)}
+            onClick={() => onModeChange(mode.value)}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
       {value.mode === 'relative' ? (
         <div className={s.relative}>
           <span className={s.last}>Last</span>
@@ -53,7 +66,7 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
               <button
                 key={amount}
                 type="button"
-                className={cx(s.cell, !isCustom && value.amount === amount && s.active)}
+                className={cx(s.cell, !isCustom && value.amount === amount && s.selected)}
                 onClick={() => {
                   setCustomText('');
                   onChange({ ...value, amount });
@@ -62,18 +75,17 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
                 {amount}
               </button>
             ))}
-            <Input
-              className={cx(s.custom, isCustom && s.customActive)}
-              type="number"
-              min={1}
+            <input
+              className={cx(s.custom, isCustom && s.selected)}
+              inputMode="numeric"
               placeholder="Custom"
               aria-label="Custom amount"
               value={customText}
               onChange={(e) => {
-                const text = e.currentTarget.value;
+                const text = e.currentTarget.value.replace(/\D/g, '');
                 setCustomText(text);
                 const amount = Number(text);
-                if (Number.isInteger(amount) && amount > 0) {
+                if (amount > 0) {
                   onChange({ ...value, amount });
                 }
               }}
@@ -84,7 +96,7 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
               <button
                 key={unit}
                 type="button"
-                className={cx(s.cell, value.unit === unit && s.active)}
+                className={cx(s.unit, value.unit === unit && s.selected)}
                 onClick={() => onChange({ ...value, unit })}
               >
                 {unit}
@@ -173,38 +185,100 @@ function TimeInput({ label, value, timeZone, onCommit, onRange }: TimeInputProps
   );
 }
 
+const CELL = 36;
+const GAP = 6;
+
 const getStyles = (theme: GrafanaTheme2) => ({
   container: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2) }),
+  // Segmented controls: a recessed track with the selected option filled.
+  modes: css({
+    display: 'flex',
+    gap: theme.spacing(0.5),
+    padding: theme.spacing(0.5),
+    borderRadius: theme.shape.radius.default,
+    border: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+  }),
+  mode: css({
+    flex: 1,
+    height: theme.spacing(4),
+    border: 'none',
+    borderRadius: theme.shape.radius.default,
+    background: 'transparent',
+    color: theme.colors.text.secondary,
+    fontWeight: theme.typography.fontWeightMedium,
+    cursor: 'pointer',
+    '&:hover': { color: theme.colors.text.primary, background: theme.colors.action.hover },
+  }),
+  selected: css({
+    background: `${theme.colors.primary.main} !important`,
+    borderColor: `${theme.colors.primary.main} !important`,
+    color: `${theme.colors.primary.contrastText} !important`,
+  }),
   relative: css({
     display: 'grid',
-    gridTemplateColumns: 'auto 1fr auto',
+    gridTemplateColumns: 'auto auto 1fr',
     alignItems: 'center',
-    gap: theme.spacing(1),
+    columnGap: theme.spacing(1.5),
   }),
-  last: css({ color: theme.colors.text.secondary }),
-  amounts: css({ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(32px, 1fr))', gap: theme.spacing(0.5) }),
-  custom: css({ gridColumn: '1 / -1', input: { textAlign: 'center' } }),
-  customActive: css({
-    input: { borderColor: theme.colors.primary.border, boxShadow: `0 0 0 1px ${theme.colors.primary.border}` },
-  }),
-  units: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5) }),
+  last: css({ color: theme.colors.text.secondary, fontSize: theme.typography.h5.fontSize }),
+  amounts: css({ display: 'grid', gridTemplateColumns: `repeat(5, ${CELL}px)`, gap: GAP }),
   cell: css({
-    height: theme.spacing(4),
+    width: CELL,
+    height: CELL,
+    padding: 0,
+    border: `1px solid ${theme.colors.border.medium}`,
+    borderRadius: theme.shape.radius.default,
+    background: 'transparent',
+    color: theme.colors.text.primary,
+    fontVariantNumeric: 'tabular-nums',
+    cursor: 'pointer',
+    '&:hover': { background: theme.colors.action.hover, borderColor: theme.colors.border.strong },
+  }),
+  custom: css({
+    gridColumn: '1 / -1',
+    height: CELL,
+    minWidth: 0,
     padding: theme.spacing(0, 1),
     border: `1px solid ${theme.colors.border.medium}`,
     borderRadius: theme.shape.radius.default,
-    background: theme.colors.background.secondary,
+    background: 'transparent',
     color: theme.colors.text.primary,
+    textAlign: 'center',
+    outline: 'none',
+    '&::placeholder': { color: theme.colors.text.secondary },
+    '&:hover': { borderColor: theme.colors.border.strong },
+    '&:focus': { borderColor: theme.colors.primary.border },
+  }),
+  units: css({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.5),
+    height: CELL * 3 + GAP * 2,
+    padding: theme.spacing(0.5),
+    borderRadius: theme.shape.radius.default,
+    border: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+  }),
+  unit: css({
+    flex: 1,
+    padding: theme.spacing(0, 1.5),
+    border: 'none',
+    borderRadius: theme.shape.radius.default,
+    background: 'transparent',
+    color: theme.colors.text.secondary,
     cursor: 'pointer',
-    '&:hover': { background: theme.colors.action.hover },
+    '&:hover': { color: theme.colors.text.primary, background: theme.colors.action.hover },
   }),
-  active: css({
-    background: theme.colors.primary.main,
-    borderColor: theme.colors.primary.main,
-    color: theme.colors.primary.contrastText,
-    '&:hover': { background: theme.colors.primary.shade },
+  // As tall as the relative grid, so switching modes does not move what is below.
+  absolute: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto 1fr',
+    alignItems: 'start',
+    alignContent: 'center',
+    gap: theme.spacing(1),
+    minHeight: CELL * 3 + GAP * 2,
   }),
-  absolute: css({ display: 'grid', gridTemplateColumns: 'auto 1fr', alignItems: 'start', gap: theme.spacing(1) }),
   absLabel: css({ color: theme.colors.text.secondary, margin: 0, lineHeight: theme.spacing(4) }),
   absField: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), minWidth: 0 }),
   zone: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
