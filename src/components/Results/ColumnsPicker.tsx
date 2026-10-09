@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Button, Checkbox, FilterInput, Icon, IconButton, Toggletip, useStyles2 } from '@grafana/ui';
@@ -21,6 +21,17 @@ interface Props {
 export function ColumnsPicker({ fields, extra, rawKeys, rowCount, settings, onChange }: Props) {
   const s = useStyles2(getStyles);
   const [search, setSearch] = useState('');
+  // The popup opens above or below the button, whichever has more room; fit it into that room.
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [maxHeight, setMaxHeight] = useState(560);
+  const measure = () => {
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (rect) {
+      // Minus the popup's own padding, arrow and a margin from the screen edge.
+      const room = Math.max(rect.top, window.innerHeight - rect.bottom) - 80;
+      setMaxHeight(Math.max(240, Math.min(560, room)));
+    }
+  };
   const needle = search.trim().toLowerCase();
   const candidates = rawKeys.filter((k) => !fields.includes(k.name) && k.name.toLowerCase().includes(needle));
 
@@ -43,7 +54,7 @@ export function ColumnsPicker({ fields, extra, rawKeys, rowCount, settings, onCh
   };
 
   const content = (
-    <div className={s.menu}>
+    <div className={s.menu} style={{ maxHeight }}>
       <div className={s.list}>
         {order.map((field, i) => (
           <div key={field} className={s.item}>
@@ -108,17 +119,21 @@ export function ColumnsPicker({ fields, extra, rawKeys, rowCount, settings, onCh
   );
 
   return (
-    <Toggletip placement="bottom-end" fitContent content={content}>
-      <Button size="sm" variant="secondary" icon="columns">
-        Columns{hiddenCount > 0 ? ` (${fields.length - hiddenCount}/${fields.length})` : ''}
-      </Button>
-    </Toggletip>
+    <div ref={anchorRef} className={s.anchor}>
+      <Toggletip placement="bottom-end" fitContent content={content} onOpen={measure}>
+        <Button size="sm" variant="secondary" icon="columns">
+          Columns{hiddenCount > 0 ? ` (${fields.length - hiddenCount}/${fields.length})` : ''}
+        </Button>
+      </Toggletip>
+    </div>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
   spacer: css({ width: 24, flexShrink: 0 }),
   raw: css({
+    flex: '1 1 auto',
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: theme.spacing(1),
@@ -131,7 +146,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   }),
-  rawList: css({ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column' }),
+  rawList: css({ flex: '1 1 auto', minHeight: 72, overflowY: 'auto', display: 'flex', flexDirection: 'column' }),
   rawItem: css({
     display: 'flex',
     alignItems: 'center',
@@ -147,8 +162,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   count: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
   empty: css({ padding: theme.spacing(0.5), color: theme.colors.text.secondary }),
-  menu: css({ width: 360, display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
-  list: css({ maxHeight: 280, overflowY: 'auto' }),
+  anchor: css({ display: 'inline-flex' }),
+  menu: css({
+    width: 360,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(1),
+    overflow: 'hidden',
+  }),
+  list: css({ flex: '0 1 auto', minHeight: 72, maxHeight: 240, overflowY: 'auto' }),
   item: css({
     display: 'flex',
     alignItems: 'center',
@@ -158,5 +180,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     '&:hover': { background: theme.colors.action.hover },
   }),
   name: css({ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
-  footer: css({ display: 'flex', gap: theme.spacing(1), '& > *': { flex: 1, justifyContent: 'center' } }),
+  footer: css({
+    flexShrink: 0,
+    display: 'flex',
+    gap: theme.spacing(1),
+    '& > *': { flex: 1, justifyContent: 'center' },
+  }),
 });
