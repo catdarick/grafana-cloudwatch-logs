@@ -1,0 +1,13 @@
+# Local development only. Export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION before `npm run server`.
+apiVersion: 1
+
+datasources:
+  - name: CloudWatch
+    type: cloudwatch
+    uid: cloudwatch-dev
+    jsonData:
+      authType: keys
+      defaultRegion: ${AWS_REGION}
+    secureJsonData:
+      accessKey: ${AWS_ACCESS_KEY_ID}
+      secretKey: ${AWS_SECRET_ACCESS_KEY}
