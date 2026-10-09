@@ -206,6 +206,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
               <section className={s.timeColumn}>
                 <h5 className={s.title}>Time range</h5>
                 <TimeRangePicker
+                  key={tab.id}
                   value={tab.timeRange}
                   timeZone={ws.state.timeZone}
                   onChange={(timeRange) => ws.updateTab(tab.id, { timeRange })}

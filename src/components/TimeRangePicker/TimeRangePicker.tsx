@@ -22,6 +22,12 @@ const MODES = [
 /** Relative/absolute picker with quick buttons, ported from the VS Code extension. */
 export function TimeRangePicker({ value, timeZone, onChange }: Props) {
   const s = useStyles2(getStyles);
+  // What the user typed in Custom. While it is non-empty the range counts as custom, even when the
+  // number happens to match a quick button (typing "10" passes through "1").
+  const [customText, setCustomText] = useState(() =>
+    value.mode === 'relative' && !AMOUNTS.includes(value.amount) ? String(value.amount) : ''
+  );
+  const isCustom = customText !== '';
 
   const onModeChange = (mode: TimeRangeValue['mode']) => {
     if (mode === value.mode) {
@@ -31,6 +37,7 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
       // Start the absolute range from whatever the relative one currently covers.
       onChange({ mode: 'absolute', ...toEpochRange(value) });
     } else {
+      setCustomText('');
       onChange({ mode: 'relative', amount: 30, unit: 'minutes' });
     }
   };
@@ -46,22 +53,27 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
               <button
                 key={amount}
                 type="button"
-                className={cx(s.cell, value.amount === amount && s.active)}
-                onClick={() => onChange({ ...value, amount })}
+                className={cx(s.cell, !isCustom && value.amount === amount && s.active)}
+                onClick={() => {
+                  setCustomText('');
+                  onChange({ ...value, amount });
+                }}
               >
                 {amount}
               </button>
             ))}
             <Input
-              className={s.custom}
+              className={cx(s.custom, isCustom && s.customActive)}
               type="number"
               min={1}
               placeholder="Custom"
               aria-label="Custom amount"
-              value={AMOUNTS.includes(value.amount) ? '' : value.amount}
+              value={customText}
               onChange={(e) => {
-                const amount = Number(e.currentTarget.value);
-                if (amount > 0) {
+                const text = e.currentTarget.value;
+                setCustomText(text);
+                const amount = Number(text);
+                if (Number.isInteger(amount) && amount > 0) {
                   onChange({ ...value, amount });
                 }
               }}
@@ -171,7 +183,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   last: css({ color: theme.colors.text.secondary }),
   amounts: css({ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(32px, 1fr))', gap: theme.spacing(0.5) }),
-  custom: css({ gridColumn: '1 / -1' }),
+  custom: css({ gridColumn: '1 / -1', input: { textAlign: 'center' } }),
+  customActive: css({
+    input: { borderColor: theme.colors.primary.border, boxShadow: `0 0 0 1px ${theme.colors.primary.border}` },
+  }),
   units: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5) }),
   cell: css({
     height: theme.spacing(4),
