@@ -3,7 +3,7 @@ import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
 import { useStyles2, useTheme2 } from '@grafana/ui';
-import { Bin } from '../../utils/table';
+import { Bin, Unloaded } from '../../utils/table';
 import { formatTime } from '../../utils/timeRange';
 
 export const LEVEL_ORDER = ['error', 'warning', 'other', 'debug'] as const;
@@ -13,15 +13,22 @@ interface Props {
   timeZone: TimeZone;
   /** Drag across bars (or click one) to zoom into them. */
   onZoom: (from: number, to: number) => void;
+  /** Part of the range whose logs did not fit the limit, drawn hatched. */
+  unloaded?: Unloaded;
+  /** e.g. "300 of 27,177 matched logs", shown when the bars do not cover everything. */
+  caption?: string;
+  /** Clicking the hatched part runs the query for just that range. */
+  onRunRange: (from: number, to: number) => void;
 }
 
 /** Logs over time for the loaded rows, stacked by level. */
-export function Histogram({ bins, timeZone, onZoom }: Props) {
+export function Histogram({ bins, timeZone, onZoom, unloaded, caption, onRunRange }: Props) {
   const s = useStyles2(getStyles);
   const theme = useTheme2();
   const [drag, setDrag] = useState<{ start: number; end: number }>();
   // Our own tooltip: the native title one only appears after a delay.
   const [hover, setHover] = useState<number>();
+  const [hoverGap, setHoverGap] = useState(false);
   const max = Math.max(1, ...bins.map((b) => b.total));
   const colors: Record<string, string> = {
     error: theme.colors.error.main,
@@ -29,7 +36,18 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
     other: theme.colors.primary.main,
     debug: theme.colors.text.disabled,
   };
-  const span = bins.length ? bins[bins.length - 1].end - bins[0].start : 0;
+  const start = bins.length ? bins[0].start : 0;
+  const span = bins.length ? bins[bins.length - 1].end - start : 0;
+  // The hatched part, clipped to what the bars show (zoom can cut it).
+  const gap =
+    unloaded && span > 0
+      ? {
+          from: Math.max(unloaded.from, start),
+          to: Math.min(unloaded.to, start + span),
+          whole: unloaded.from >= start && unloaded.to <= start + span,
+        }
+      : undefined;
+  const showGap = gap && gap.to > gap.from;
   const format = span > 2 * 86400000 ? 'MM-DD HH:mm' : span > 3600000 ? 'HH:mm' : 'HH:mm:ss';
   const inDrag = (i: number) => drag && i >= Math.min(drag.start, drag.end) && i <= Math.max(drag.start, drag.end);
 
@@ -52,6 +70,20 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
         }}
         onMouseUp={finish}
       >
+        {showGap && unloaded && (
+          <div
+            className={s.gap}
+            style={{ left: `${((gap.from - start) / span) * 100}%`, width: `${((gap.to - gap.from) / span) * 100}%` }}
+            onMouseEnter={() => {
+              setHover(undefined);
+              setHoverGap(true);
+            }}
+            onMouseLeave={() => setHoverGap(false)}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+            onClick={() => onRunRange(gap.from, gap.to)}
+          />
+        )}
         {bins.map((bin, i) => (
           <div
             key={i}
@@ -109,10 +141,33 @@ export function Histogram({ bins, timeZone, onZoom }: Props) {
           <div className={s.tooltipHint}>Click or drag to zoom</div>
         </div>
       )}
+      {hoverGap && showGap && unloaded && (
+        <div
+          className={s.tooltip}
+          style={{
+            left: `${((gap.from + (gap.to - gap.from) / 2 - start) / span) * 100}%`,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <div className={s.tooltipTime}>
+            {formatTime(gap.from, timeZone, 'HH:mm:ss')} – {formatTime(gap.to, timeZone, 'HH:mm:ss')}
+          </div>
+          <div className={s.tooltipTotal}>
+            {gap.whole
+              ? `${unloaded.count.toLocaleString('en-US')} logs not loaded`
+              : `Part of ${unloaded.count.toLocaleString('en-US')} logs not loaded`}
+          </div>
+          <div>They matched the query but did not fit its limit.</div>
+          <div className={s.tooltipHint}>Click to run the query for this range</div>
+        </div>
+      )}
       {bins.length > 0 && (
         <div className={s.axis}>
           <span>{formatTime(bins[0].start, timeZone, format)}</span>
-          <span>{formatTime(bins[Math.floor(bins.length / 2)].start, timeZone, format)}</span>
+          <span className={s.axisMiddle}>
+            {formatTime(bins[Math.floor(bins.length / 2)].start, timeZone, format)}
+            {caption && <span className={s.caption}>{caption}</span>}
+          </span>
           <span>{formatTime(bins[bins.length - 1].end, timeZone, format)}</span>
         </div>
       )}
@@ -128,6 +183,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: theme.spacing(0.5),
     userSelect: 'none',
   }),
+  gap: css({
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    zIndex: 1,
+    cursor: 'pointer',
+    borderRadius: 2,
+    border: `1px dashed ${theme.colors.border.medium}`,
+    backgroundImage: `repeating-linear-gradient(135deg, ${theme.colors.text.disabled} 0 1px, transparent 1px 7px)`,
+    opacity: 0.6,
+    '&:hover': { opacity: 1, borderColor: theme.colors.primary.border },
+  }),
+  axisMiddle: css({ display: 'flex', gap: theme.spacing(1) }),
+  caption: css({ color: theme.colors.warning.text }),
   tooltip: css({
     position: 'absolute',
     bottom: 'calc(100% - 4px)',
@@ -149,6 +218,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   tooltipCount: css({ marginLeft: 'auto', paddingLeft: theme.spacing(2) }),
   tooltipHint: css({ marginTop: theme.spacing(0.5), color: theme.colors.text.disabled }),
   bars: css({
+    position: 'relative',
     display: 'flex',
     alignItems: 'flex-end',
     gap: 2,

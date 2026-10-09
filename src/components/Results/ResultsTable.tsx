@@ -15,10 +15,12 @@ import {
   isMonoColumn,
   moveColumn,
   orderColumns,
+  parseSort,
   passesFilters,
   queryFilter,
   rowMatches,
   splitMatches,
+  unloadedRange,
   valueCounts,
   visibleColumns,
 } from '../../utils/table';
@@ -155,6 +157,17 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
     const range = zoom ?? result;
     return points.length > 0 || zoom ? histogram(points, range.from, range.to) : undefined;
   }, [rows, result, displayRows, levelField, zoom]);
+
+  // Rows cut off by the limit: where they are on the time axis (when we can tell) and how many.
+  const unloaded = useMemo(() => {
+    const times = result.details.flatMap((d) => (d.timestamp === undefined ? [] : [d.timestamp]));
+    return unloadedRange(times, result.from, result.to, parseSort(result.query ?? ''), result.stats?.recordsMatched);
+  }, [result]);
+  const matched = result.stats?.recordsMatched;
+  const caption =
+    matched !== undefined && matched > result.rows.length
+      ? `${result.rows.length.toLocaleString('en-US')} of ${Math.round(matched).toLocaleString('en-US')} matched logs`
+      : undefined;
 
   // No React Compiler here anyway; the virtualizer is re-read on every render by design.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -374,7 +387,16 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange, onRun
           </Button>
         </div>
       )}
-      {bins && <Histogram bins={bins} timeZone={timeZone} onZoom={(from, to) => setZoom({ from, to })} />}
+      {bins && (
+        <Histogram
+          bins={bins}
+          timeZone={timeZone}
+          onZoom={(from, to) => setZoom({ from, to })}
+          unloaded={unloaded}
+          caption={caption}
+          onRunRange={onRunRange}
+        />
+      )}
 
       <div className={s.scroll} ref={scrollRef}>
         <table

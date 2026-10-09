@@ -10,6 +10,7 @@ import {
   parseSort,
   queryFilter,
   sortOrder,
+  unloadedRange,
   splitMatches,
   valueCounts,
   visibleColumns,
@@ -129,5 +130,23 @@ describe('sorting', () => {
     const values = ['10', '9', undefined, '100'];
     expect(sortOrder(4, [{ field: 'n', desc: true }], (i) => values[i])).toEqual([3, 0, 1, 2]);
     expect(sortOrder(4, [{ field: 'n', desc: false }], (i) => values[i])).toEqual([1, 0, 3, 2]);
+  });
+});
+
+describe('unloadedRange', () => {
+  const desc = [{ field: '@timestamp', desc: true }];
+  it('puts the cut-off logs before the oldest loaded row for newest-first queries', () => {
+    expect(unloadedRange([50, 60, 70], 0, 100, desc, 1000)).toEqual({ from: 0, to: 50, count: 997 });
+  });
+  it('puts them after the newest row for oldest-first queries', () => {
+    expect(unloadedRange([10, 20], 0, 100, [{ field: '@timestamp', desc: false }], 5)).toEqual({
+      from: 20,
+      to: 100,
+      count: 3,
+    });
+  });
+  it('knows nothing when everything was loaded or rows are sorted by something else', () => {
+    expect(unloadedRange([10, 20], 0, 100, desc, 2)).toBeUndefined();
+    expect(unloadedRange([10, 20], 0, 100, [{ field: 'n', desc: true }], 50)).toBeUndefined();
   });
 });

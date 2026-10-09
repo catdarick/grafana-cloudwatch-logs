@@ -87,6 +87,7 @@ export async function runLogsQuery(args: RunQueryArgs): Promise<QueryResult> {
   const result = applyQuerySort(framesToRows(parsed.data as DataFrame[], args.query), args.query);
   return {
     ...result,
+    query: args.query,
     ranAt: startedAt,
     durationMs: Date.now() - startedAt,
     from: args.from,

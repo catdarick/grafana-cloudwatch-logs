@@ -10,6 +10,8 @@ export interface LogGroupRef {
 }
 
 export interface QueryResult {
+  /** The query as the user wrote it (without what we prepend). */
+  query: string;
   ranAt: number;
   durationMs: number;
   from: number;

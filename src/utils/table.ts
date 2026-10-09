@@ -235,3 +235,33 @@ function compareValues(a: unknown, b: unknown): number {
   }
   return String(a).localeCompare(String(b));
 }
+
+export interface Unloaded {
+  from: number;
+  to: number;
+  /** Matched logs that did not fit the limit; all of them lie in this range. */
+  count: number;
+}
+
+/**
+ * The part of the time range whose logs were cut off by the query's limit. Only known when rows are
+ * sorted by @timestamp: newest-first leaves the start of the range unloaded, oldest-first the end.
+ */
+export function unloadedRange(
+  times: number[],
+  from: number,
+  to: number,
+  sort: SortKey[],
+  matched: number | undefined
+): Unloaded | undefined {
+  const missing = (matched ?? 0) - times.length;
+  if (missing <= 0 || times.length === 0 || sort[0]?.field !== '@timestamp') {
+    return undefined;
+  }
+  if (sort[0].desc) {
+    const oldest = Math.min(...times);
+    return oldest > from ? { from, to: oldest, count: missing } : undefined;
+  }
+  const newest = Math.max(...times);
+  return newest < to ? { from: newest, to, count: missing } : undefined;
+}
