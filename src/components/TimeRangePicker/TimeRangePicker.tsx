@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
-import { Input, useStyles2 } from '@grafana/ui';
+import { Icon, Input, useStyles2 } from '@grafana/ui';
 import { TimeRangeValue } from '../../types';
 import { parseRangeInput, parseTimeInput } from '../../utils/parseTime';
 import { AMOUNTS, UNITS, formatTime, toEpochRange, zoneLabel } from '../../utils/timeRange';
@@ -112,6 +112,27 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
             timeZone={timeZone}
             onCommit={(from) => onChange({ ...value, from })}
             onRange={(range) => onChange({ mode: 'absolute', ...range })}
+            actions={
+              <>
+                <button
+                  type="button"
+                  className={s.chip}
+                  title="Set to the current time"
+                  onClick={() => onChange({ ...value, from: nowSecond() })}
+                >
+                  Now
+                </button>
+                <button
+                  type="button"
+                  className={s.chip}
+                  title="Copy From into To"
+                  aria-label="Copy From into To"
+                  onClick={() => onChange({ ...value, to: value.from })}
+                >
+                  <Icon name="arrow-down" size="sm" />
+                </button>
+              </>
+            }
           />
           <TimeInput
             label="To"
@@ -119,6 +140,27 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
             timeZone={timeZone}
             onCommit={(to) => onChange({ ...value, to })}
             onRange={(range) => onChange({ mode: 'absolute', ...range })}
+            actions={
+              <>
+                <button
+                  type="button"
+                  className={s.chip}
+                  title="Set to the current time"
+                  onClick={() => onChange({ ...value, to: nowSecond() })}
+                >
+                  Now
+                </button>
+                <button
+                  type="button"
+                  className={s.chip}
+                  title="Copy To into From"
+                  aria-label="Copy To into From"
+                  onClick={() => onChange({ ...value, from: value.to })}
+                >
+                  <Icon name="arrow-up" size="sm" />
+                </button>
+              </>
+            }
           />
           {value.from >= value.to && <span className={s.error}>From must be earlier than To</span>}
         </div>
@@ -133,13 +175,15 @@ interface TimeInputProps {
   timeZone: TimeZone;
   onCommit: (ms: number) => void;
   onRange: (range: { from: number; to: number }) => void;
+  /** Buttons next to the field: set to now, copy into the other field. */
+  actions: React.ReactNode;
 }
 
 /**
  * Free-text timestamp field: paste ISO, epoch, "08.10.2026 22:59", "now-1h" or a whole "A - B" range.
  * Text without an explicit offset is read in the selected time zone.
  */
-function TimeInput({ label, value, timeZone, onCommit, onRange }: TimeInputProps) {
+function TimeInput({ label, value, timeZone, onCommit, onRange, actions }: TimeInputProps) {
   const s = useStyles2(getStyles);
   const [draft, setDraft] = useState<string>();
   const parsed = draft === undefined ? value : parseTimeInput(draft, timeZone);
@@ -181,8 +225,14 @@ function TimeInput({ label, value, timeZone, onCommit, onRange }: TimeInputProps
           </span>
         )}
       </div>
+      <div className={s.absActions}>{actions}</div>
     </>
   );
+}
+
+/** Now, without milliseconds: the field shows seconds, so the value should match what is shown. */
+function nowSecond(): number {
+  return Math.floor(Date.now() / 1000) * 1000;
 }
 
 const CELL = 36;
@@ -273,13 +323,33 @@ const getStyles = (theme: GrafanaTheme2) => ({
   // As tall as the relative grid, so switching modes does not move what is below.
   absolute: css({
     display: 'grid',
-    gridTemplateColumns: 'auto 1fr',
+    gridTemplateColumns: 'auto 1fr auto',
     alignItems: 'start',
     alignContent: 'center',
     gap: theme.spacing(1),
     minHeight: CELL * 3 + GAP * 2,
   }),
   absLabel: css({ color: theme.colors.text.secondary, margin: 0, lineHeight: theme.spacing(4) }),
+  chip: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 28,
+    height: 28,
+    padding: theme.spacing(0, 1),
+    border: `1px solid ${theme.colors.border.medium}`,
+    borderRadius: theme.shape.radius.default,
+    background: 'transparent',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    cursor: 'pointer',
+    '&:hover': {
+      color: theme.colors.text.primary,
+      borderColor: theme.colors.border.strong,
+      background: theme.colors.action.hover,
+    },
+  }),
+  absActions: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5), height: theme.spacing(4) }),
   absField: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), minWidth: 0 }),
   zone: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
   preview: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
