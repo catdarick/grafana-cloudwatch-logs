@@ -216,6 +216,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                     variant="destructive"
                     icon="square-shape"
                     fullWidth
+                    className={s.runButton}
                     onClick={() => cancelQuery(requestId(tab.id))}
                   >
                     Stop
@@ -225,6 +226,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                     size="lg"
                     icon="play"
                     fullWidth
+                    className={s.runButton}
                     disabled={!canRun}
                     onClick={() => run()}
                     tooltip="Ctrl/Cmd + Enter"
@@ -341,6 +343,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
     [theme.breakpoints.down('lg')]: { gridTemplateColumns: 'minmax(0, 1fr)' },
   }),
   timeColumn: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2) }),
+  // Same size whatever the picker above shows (Relative grid or Absolute fields).
+  runButton: css({ flex: '0 0 auto', height: theme.spacing(6) }),
   title: css({ margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }),
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
