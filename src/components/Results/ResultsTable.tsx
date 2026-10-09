@@ -99,7 +99,8 @@ export function ResultsTable({ result, timeZone, columns, onColumnsChange }: Pro
 
   useEffect(() => {
     if (currentRow !== undefined) {
-      rowRefs.current.get(currentRow)?.scrollIntoView({ block: 'nearest' });
+      // Center rather than nearest: the toolbar sticks to the top and would cover a row scrolled to the edge.
+      rowRefs.current.get(currentRow)?.scrollIntoView({ block: 'center' });
     }
     // Scroll only when asked (typing or prev/next), not on every re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -386,7 +387,18 @@ function LogDetailsView({ json, logGroup, logStream }: { json: string; logGroup?
 
 const getStyles = (theme: GrafanaTheme2) => ({
   wrapper: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1), minHeight: 0 }),
-  toolbar: css({ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: theme.spacing(2) }),
+  // Sticks to the top of the page while scrolling through results, so search stays reachable.
+  toolbar: css({
+    position: 'sticky',
+    top: 0,
+    zIndex: 3,
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: theme.spacing(2),
+    padding: theme.spacing(1, 0),
+    background: theme.colors.background.canvas,
+  }),
   search: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(1), marginRight: 'auto' }),
   count: css({ color: theme.colors.text.secondary, whiteSpace: 'nowrap' }),
   scroll: css({
