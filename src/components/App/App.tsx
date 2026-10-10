@@ -4,7 +4,7 @@ import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
-import { formatProblem, lintQuery } from '../../language/lint';
+import { QueryProblem, formatProblem, lintQuery } from '../../language/lint';
 import { knownRawFields, useRawFieldHistory } from '../../state/rawFieldHistory';
 import { useTableViews } from '../../state/tableViews';
 import { useWorkspace } from '../../state/useWorkspace';
@@ -150,6 +150,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   // our own check finds in the query instead.
   const genericError = error === GENERIC_PLUGIN_ERROR;
   const problems = useMemo(() => (genericError ? lintQuery(tab.query) : []), [genericError, tab.query]);
+  const errors = problems.filter((p) => p.severity === 'error');
+  const warnings = problems.filter((p) => p.severity === 'warning');
   const failed = Object.fromEntries(ws.state.tabs.map((t) => [t.id, Boolean(runError[t.id] ?? results[t.id]?.error)]));
 
   const zoomTo = (from: number, to: number) => {
@@ -226,6 +228,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 onApplyFilter={(clause) => ws.updateTab(tab.id, { query: addQueryStage(tab.query, clause) })}
                 relativeTime={tab.timeRange.mode === 'relative'}
                 onCopyLink={copyLink}
+                showWarnings={genericError}
               />
               <section className={s.timeColumn}>
                 <TimeRangePicker
@@ -270,17 +273,18 @@ function App({ meta }: AppRootProps<AppSettings>) {
               error
             ) : problems.length > 0 ? (
               <>
-                <div>Grafana does not pass on CloudWatch&apos;s error message. The query has these problems:</div>
-                <ul className={s.problems}>
-                  {problems.map((p) => (
-                    <li key={formatProblem(p)}>{formatProblem(p)}</li>
-                  ))}
-                </ul>
+                <div>Grafana does not pass on CloudWatch&apos;s error message.</div>
+                <ProblemList title="The query has these errors:" problems={errors} className={s.problems} />
+                <ProblemList
+                  title={errors.length > 0 ? 'It may also be:' : 'Possible causes:'}
+                  problems={warnings}
+                  className={s.problems}
+                />
               </>
             ) : (
               <>
-                {error}. Grafana does not pass on CloudWatch&apos;s error message, and no syntax problem was found in
-                the query. The exact message is in the Grafana server log.
+                {error}. Grafana does not pass on CloudWatch&apos;s error message, and no problem was found in the
+                query. The exact message is in the Grafana server log.
               </>
             )}
           </Alert>
@@ -346,6 +350,22 @@ function App({ meta }: AppRootProps<AppSettings>) {
 }
 
 export default App;
+
+function ProblemList({ title, problems, className }: { title: string; problems: QueryProblem[]; className: string }) {
+  if (problems.length === 0) {
+    return null;
+  }
+  return (
+    <>
+      <div>{title}</div>
+      <ul className={className}>
+        {problems.map((p) => (
+          <li key={formatProblem(p)}>{formatProblem(p)}</li>
+        ))}
+      </ul>
+    </>
+  );
+}
 
 /** "2.3s", "Scanned 1.2 GB", "48,312 records", "50 matched": what the query scanned and found. */
 function statsParts(result: QueryResult): string[] {

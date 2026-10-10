@@ -52,6 +52,8 @@ interface Props {
   /** Relative ranges get a second option that pins the time, so the link shows the same logs later. */
   relativeTime: boolean;
   onCopyLink: (fixedTime: boolean) => void;
+  /** Also underline likely mistakes, not just certain ones: set once the query has failed. */
+  showWarnings: boolean;
 }
 
 export function QueryEditor({
@@ -67,6 +69,7 @@ export function QueryEditor({
   onCopyLink,
   pendingFilters,
   onApplyFilter,
+  showWarnings,
 }: Props) {
   const s = useStyles2(getStyles);
   const [editor, setEditor] = useState<{ editor: MonacoEditor; monaco: Monaco }>();
@@ -121,22 +124,25 @@ export function QueryEditor({
       zoneRef.current = { id, dom };
     });
   }, [editor, pendingKey, query, s]);
-  // Likely syntax errors, underlined as you type: Grafana 10.4 does not pass CloudWatch's own on.
+  // Syntax errors, underlined as you type: Grafana 10.4 does not pass CloudWatch's own on. Likely
+  // mistakes only once the query has failed, since the query may well be valid.
   useEffect(() => {
     const model = editor?.editor.getModel();
     if (!editor || !model) {
       return;
     }
-    const markers = lintQuery(query).map((p) => ({
-      severity: editor.monaco.MarkerSeverity.Error,
-      message: p.message,
-      startLineNumber: p.line,
-      startColumn: p.column,
-      endLineNumber: p.line,
-      endColumn: p.endColumn,
-    }));
+    const markers = lintQuery(query)
+      .filter((p) => showWarnings || p.severity === 'error')
+      .map((p) => ({
+        severity: p.severity === 'error' ? editor.monaco.MarkerSeverity.Error : editor.monaco.MarkerSeverity.Warning,
+        message: p.message,
+        startLineNumber: p.line,
+        startColumn: p.column,
+        endLineNumber: p.line,
+        endColumn: p.endColumn,
+      }));
     editor.monaco.editor.setModelMarkers(model, LINT_OWNER, markers);
-  }, [editor, query]);
+  }, [editor, query, showWarnings]);
 
   // Which dialog is open: save under a new name, or rename the current saved query.
   const [dialog, setDialog] = useState<'saveAs' | 'rename'>();
@@ -312,7 +318,14 @@ export function QueryEditor({
         showLineNumbers
         showMiniMap={false}
         containerStyles={s.editor}
-        monacoOptions={{ wordWrap: 'on', scrollBeyondLastLine: false, fontSize: 13, renderLineHighlight: 'none' }}
+        monacoOptions={{
+          wordWrap: 'on',
+          scrollBeyondLastLine: false,
+          fontSize: 13,
+          renderLineHighlight: 'none',
+          // Hovers (a problem's message) may go past the editor's edges instead of being cut off.
+          fixedOverflowWidgets: true,
+        }}
         getSuggestions={getSuggestions}
         onBeforeEditorMount={registerLogsInsights}
         onEditorDidMount={(editor, monaco) => {
@@ -468,6 +481,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
     cursor: 'text',
     position: 'relative',
     zIndex: 0,
+    // While a hover (a problem's message) is open, above the bar too: on the first lines it opens over it.
+    '&:has(.monaco-hover:not(.hidden))': { zIndex: 2 },
   }),
   list: css({ width: 420, display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
   items: css({ listStyle: 'none', margin: 0, padding: 0, maxHeight: 320, overflowY: 'auto' }),
