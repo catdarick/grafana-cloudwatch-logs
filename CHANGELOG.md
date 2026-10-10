@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3
+
+- Absolute time range: a calendar in the From and To fields picks the days and the time of each end, in the selected time zone.
+- Query editor checks queries against the documented Logs Insights syntax, since Grafana 10.4 hides CloudWatch's own errors behind "An error occurred within the plugin". Errors are underlined in red, unknown commands and functions in yellow; once a query fails, likely causes are underlined too and listed in the error.
+- Highlighting, checks and autocomplete read queries the same way. Autocomplete follows the position (commands, fields and functions, asc/desc), works after `(`, `,` and `|`, and quotes field names that need backticks.
+- Autocomplete remembers the raw log fields of each log group's last 20 queries.
+- Table filters on fields like `request-id` quote the name instead of subtracting; a commented-out `sort` no longer re-sorts the table.
+- Sideways swipes over the results table no longer navigate the browser back or forward.
+
 ## 1.0.2
 
 - Results table: switching tabs keeps each tab's view and the page scroll position; scrolling and tab switching are faster.
