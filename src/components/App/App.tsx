@@ -4,6 +4,7 @@ import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
+import { knownRawFields, useRawFieldHistory } from '../../state/rawFieldHistory';
 import { useTableViews } from '../../state/tableViews';
 import { useWorkspace } from '../../state/useWorkspace';
 import { DEFAULT_REGION, PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
@@ -42,6 +43,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
   // Search, filters, zoom and scroll of each tab's table, so switching tabs does not lose them.
   const tableViews = useTableViews();
+  // Field names from the raw JSON logs of each group's last queries, kept across reloads.
+  const rawFields = useRawFieldHistory();
 
   // A shared link opens its query in a tab once; the params are then dropped so a reload keeps the workspace.
   useEffect(() => {
@@ -57,7 +60,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Autocomplete: fields CloudWatch has seen in the selected groups, plus fields from earlier results.
+  // Autocomplete: fields CloudWatch has seen in the selected groups, fields of their raw logs from
+  // recent queries, plus fields from earlier results.
   useEffect(() => {
     if (!datasourceUid) {
       return;
@@ -76,9 +80,10 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const completionFields = useMemo(() => {
     const names = new Set<string>();
     tab.logGroups.forEach((g) => discoveredFields[`${g.region}:${g.name}`]?.forEach((f) => names.add(f)));
+    knownRawFields(rawFields.history, tab.logGroups).forEach((f) => names.add(f));
     Object.values(results).forEach((r) => r?.fields.forEach((f) => names.add(f)));
     return Array.from(names).sort();
-  }, [tab.logGroups, discoveredFields, results]);
+  }, [tab.logGroups, discoveredFields, rawFields.history, results]);
 
   const defaultRegion = settings.defaultRegion || DEFAULT_REGION;
 
@@ -92,6 +97,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
       return;
     }
     const tabId = tab.id;
+    const logGroups = tab.logGroups;
     const query = override.query ?? tab.query;
     const { from, to } = toEpochRange(override.timeRange ?? tab.timeRange);
     setRunning((r) => ({ ...r, [tabId]: true }));
@@ -101,11 +107,15 @@ function App({ meta }: AppRootProps<AppSettings>) {
         datasourceUid,
         requestId: requestId(tabId),
         query,
-        logGroups: tab.logGroups,
+        logGroups,
         from,
         to,
       });
       setResults((r) => ({ ...r, [tabId]: result }));
+      if (!result.error) {
+        // After the table has rendered: this parses every message once more.
+        setTimeout(() => rawFields.record(logGroups, result.details));
+      }
     } catch (e) {
       if (!isCancelled(e)) {
         setRunError((errs) => ({ ...errs, [tabId]: errorMessage(e) }));
