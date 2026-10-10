@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
-import { Icon, Input, useStyles2 } from '@grafana/ui';
+import { Icon, IconButton, Input, useStyles2 } from '@grafana/ui';
 import { TimeRangeValue } from '../../types';
 import { parseRangeInput, parseTimeInput } from '../../utils/parseTime';
 import { AMOUNTS, UNITS, formatTime, toEpochRange, zoneLabel } from '../../utils/timeRange';
+import { RangeCalendar, RangeEnd } from './RangeCalendar';
 
 interface Props {
   value: TimeRangeValue;
@@ -28,6 +29,19 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
     value.mode === 'relative' && !AMOUNTS.includes(value.amount) ? String(value.amount) : ''
   );
   const isCustom = customText !== '';
+  // The calendar popup: under the field whose button opened it, setting the active end.
+  const [calendar, setCalendar] = useState<{ anchor: RangeEnd; active: RangeEnd; top: number }>();
+  const closeCalendar = useCallback(() => setCalendar(undefined), []);
+  // Closes the popup the way a click outside does, keeping what was picked.
+  const calendarCloseRef = useRef<() => void>();
+  // A field's button opens the popup for its end, moves an open one over, or closes it.
+  const toggleCalendar = (end: RangeEnd, top: number) => {
+    if (calendar?.anchor === end) {
+      calendarCloseRef.current?.();
+    } else {
+      setCalendar({ anchor: end, active: end, top });
+    }
+  };
 
   const onModeChange = (mode: TimeRangeValue['mode']) => {
     if (mode === value.mode) {
@@ -112,6 +126,7 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
             timeZone={timeZone}
             onCommit={(from) => onChange({ ...value, from })}
             onRange={(range) => onChange({ mode: 'absolute', ...range })}
+            onCalendar={(top) => toggleCalendar('from', top)}
             actions={
               <>
                 <button
@@ -140,6 +155,7 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
             timeZone={timeZone}
             onCommit={(to) => onChange({ ...value, to })}
             onRange={(range) => onChange({ mode: 'absolute', ...range })}
+            onCalendar={(top) => toggleCalendar('to', top)}
             actions={
               <>
                 <button
@@ -163,6 +179,22 @@ export function TimeRangePicker({ value, timeZone, onChange }: Props) {
             }
           />
           {value.from >= value.to && <span className={s.error}>From must be earlier than To</span>}
+          {calendar && (
+            <RangeCalendar
+              from={value.from}
+              to={value.to}
+              timeZone={timeZone}
+              active={calendar.active}
+              onActiveChange={(active) => setCalendar((c) => c && { ...c, active })}
+              top={calendar.top}
+              onApply={(range) => {
+                onChange({ mode: 'absolute', ...range });
+                closeCalendar();
+              }}
+              onClose={closeCalendar}
+              closeRef={calendarCloseRef}
+            />
+          )}
         </div>
       )}
     </div>
@@ -175,6 +207,8 @@ interface TimeInputProps {
   timeZone: TimeZone;
   onCommit: (ms: number) => void;
   onRange: (range: { from: number; to: number }) => void;
+  /** Opens or closes the calendar for this end, right below the field (offset in the fields block). */
+  onCalendar: (top: number) => void;
   /** Buttons next to the field: set to now, copy into the other field. */
   actions: React.ReactNode;
 }
@@ -183,8 +217,9 @@ interface TimeInputProps {
  * Free-text timestamp field: paste ISO, epoch, "08.10.2026 22:59", "now-1h" or a whole "A - B" range.
  * Text without an explicit offset is read in the selected time zone.
  */
-function TimeInput({ label, value, timeZone, onCommit, onRange, actions }: TimeInputProps) {
+function TimeInput({ label, value, timeZone, onCommit, onRange, onCalendar, actions }: TimeInputProps) {
   const s = useStyles2(getStyles);
+  const fieldRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<string>();
   const parsed = draft === undefined ? value : parseTimeInput(draft, timeZone);
   const invalid = draft !== undefined && draft.trim() !== '' && parsed === undefined;
@@ -206,7 +241,7 @@ function TimeInput({ label, value, timeZone, onCommit, onRange, actions }: TimeI
   return (
     <>
       <label className={s.absLabel}>{label}</label>
-      <div className={s.absField}>
+      <div ref={fieldRef} className={s.absField}>
         <Input
           aria-label={label}
           invalid={invalid}
@@ -215,7 +250,21 @@ function TimeInput({ label, value, timeZone, onCommit, onRange, actions }: TimeI
           onChange={(e) => onTextChange(e.currentTarget.value)}
           onBlur={() => setDraft(undefined)}
           onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-          suffix={<span className={s.zone}>{zoneLabel(value, timeZone)}</span>}
+          suffix={
+            <span className={s.suffix}>
+              <span className={s.zone}>{zoneLabel(value, timeZone)}</span>
+              <IconButton
+                name="calendar-alt"
+                size="sm"
+                tooltip={`Pick ${label} on a calendar`}
+                data-range-calendar-trigger
+                onClick={() => {
+                  const field = fieldRef.current!;
+                  onCalendar(field.offsetTop + (field.firstElementChild as HTMLElement).offsetHeight + 4);
+                }}
+              />
+            </span>
+          }
         />
         {draft !== undefined && (
           <span className={invalid ? s.error : s.preview}>
@@ -322,6 +371,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   // As tall as the relative grid, so switching modes does not move what is below.
   absolute: css({
+    // The calendar popup opens below it.
+    position: 'relative',
     display: 'grid',
     gridTemplateColumns: 'auto 1fr auto',
     alignItems: 'start',
@@ -355,6 +406,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   absActions: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5), height: theme.spacing(4) }),
   absField: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.5), minWidth: 0 }),
+  suffix: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
   zone: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
   preview: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize }),
   error: css({ color: theme.colors.error.text, fontSize: theme.typography.bodySmall.fontSize, gridColumn: '2' }),
