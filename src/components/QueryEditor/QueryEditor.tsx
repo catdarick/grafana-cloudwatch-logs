@@ -5,8 +5,6 @@ import { getAppEvents } from '@grafana/runtime';
 import {
   Button,
   CodeEditor,
-  CodeEditorSuggestionItem,
-  CodeEditorSuggestionItemKind,
   Dropdown,
   Field,
   FilterInput,
@@ -20,17 +18,10 @@ import {
   Toggletip,
   useStyles2,
 } from '@grafana/ui';
-import {
-  COMMANDS,
-  FUNCTIONS,
-  KEYWORDS,
-  LANGUAGE_ID,
-  SYSTEM_FIELDS,
-  registerLogsInsights,
-} from '../../language/logsInsights';
+import { LANGUAGE_ID, registerLogsInsights, setModelFields } from '../../language/logsInsights';
 import { lintQuery } from '../../language/lint';
+import { queryStageLine } from '../../language/parse';
 import { SavedQuery } from '../../types';
-import { queryStageLine } from '../../utils/table';
 
 const LINT_OWNER = 'logs-insights-lint';
 const SAVE_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘S' : 'Ctrl+S';
@@ -52,8 +43,8 @@ interface Props {
   /** Relative ranges get a second option that pins the time, so the link shows the same logs later. */
   relativeTime: boolean;
   onCopyLink: (fixedTime: boolean) => void;
-  /** Also underline likely mistakes, not just certain ones: set once the query has failed. */
-  showWarnings: boolean;
+  /** Also underline what is valid but often a mistake: set once the query has failed. */
+  showHints: boolean;
 }
 
 export function QueryEditor({
@@ -69,7 +60,7 @@ export function QueryEditor({
   onCopyLink,
   pendingFilters,
   onApplyFilter,
-  showWarnings,
+  showHints,
 }: Props) {
   const s = useStyles2(getStyles);
   const [editor, setEditor] = useState<{ editor: MonacoEditor; monaco: Monaco }>();
@@ -124,25 +115,27 @@ export function QueryEditor({
       zoneRef.current = { id, dom };
     });
   }, [editor, pendingKey, query, s]);
-  // Syntax errors, underlined as you type: Grafana 10.4 does not pass CloudWatch's own on. Likely
-  // mistakes only once the query has failed, since the query may well be valid.
+  // Problems, underlined as you type: Grafana 10.4 does not pass CloudWatch's own errors on. Hints
+  // only once the query has failed, since what they point at is valid.
   useEffect(() => {
     const model = editor?.editor.getModel();
     if (!editor || !model) {
       return;
     }
+    const { MarkerSeverity } = editor.monaco;
+    const severity = { error: MarkerSeverity.Error, warning: MarkerSeverity.Warning, hint: MarkerSeverity.Info };
     const markers = lintQuery(query)
-      .filter((p) => showWarnings || p.severity === 'error')
+      .filter((p) => showHints || p.severity !== 'hint')
       .map((p) => ({
-        severity: p.severity === 'error' ? editor.monaco.MarkerSeverity.Error : editor.monaco.MarkerSeverity.Warning,
+        severity: severity[p.severity],
         message: p.message,
         startLineNumber: p.line,
         startColumn: p.column,
-        endLineNumber: p.line,
+        endLineNumber: p.endLine,
         endColumn: p.endColumn,
       }));
     editor.monaco.editor.setModelMarkers(model, LINT_OWNER, markers);
-  }, [editor, query, showWarnings]);
+  }, [editor, query, showHints]);
 
   // Which dialog is open: save under a new name, or rename the current saved query.
   const [dialog, setDialog] = useState<'saveAs' | 'rename'>();
@@ -181,16 +174,11 @@ export function QueryEditor({
     fieldsRef.current = fields;
   });
 
-  const getSuggestions = (): CodeEditorSuggestionItem[] => [
-    ...COMMANDS.map((label) => ({ label, kind: CodeEditorSuggestionItemKind.Method, detail: 'command' })),
-    ...FUNCTIONS.map((label) => ({ label, kind: CodeEditorSuggestionItemKind.Method, detail: 'function' })),
-    ...KEYWORDS.map((label) => ({ label, kind: CodeEditorSuggestionItemKind.Text, detail: 'keyword' })),
-    ...Array.from(new Set([...SYSTEM_FIELDS, ...fieldsRef.current])).map((label) => ({
-      label,
-      kind: CodeEditorSuggestionItemKind.Field,
-      detail: 'field',
-    })),
-  ];
+  // Autocomplete offers the fields known for the selected log groups.
+  useEffect(() => {
+    const model = editor?.editor.getModel();
+    return model ? setModelFields(model, () => fieldsRef.current) : undefined;
+  }, [editor]);
 
   const confirmDialog = () => {
     const trimmed = name.trim();
@@ -325,8 +313,9 @@ export function QueryEditor({
           renderLineHighlight: 'none',
           // Hovers (a problem's message) may go past the editor's edges instead of being cut off.
           fixedOverflowWidgets: true,
+          // Only the language's own suggestions: not every word of the query, nor in comments.
+          wordBasedSuggestions: false,
         }}
-        getSuggestions={getSuggestions}
         onBeforeEditorMount={registerLogsInsights}
         onEditorDidMount={(editor, monaco) => {
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());

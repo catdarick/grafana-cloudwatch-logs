@@ -1,3 +1,5 @@
+import { SortKey } from '../language/parse';
+import { fieldRef } from '../language/spec';
 import { ColumnSettings, LogDetails } from '../types';
 
 export type Row = Record<string, string>;
@@ -104,31 +106,15 @@ export function fullLog(row: Row, details: LogDetails | undefined): unknown {
   return { ...row, '@message': message };
 }
 
-const PLAIN_FIELD = /^[@A-Za-z_][\w.@-]*$/;
-
 /** A Logs Insights `filter` clause for a field and a value taken from a log. */
 export function queryFilter(path: string, value: unknown, negate: boolean): string {
-  const field = PLAIN_FIELD.test(path) ? path : `\`${path.replace(/`/g, '``')}\``;
+  const field = fieldRef(path);
   if (value === null || value === undefined) {
     return negate ? `filter ispresent(${field})` : `filter isempty(${field})`;
   }
   const literal =
     typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(String(value));
   return `filter ${field} ${negate ? '!=' : '='} ${literal}`;
-}
-
-/**
- * Adds a clause before the first sort/limit/stats/dedup/display stage, so it narrows the logs
- * rather than the already limited or aggregated output.
- */
-const LATE_STAGE = /\|\s*(sort|limit|stats|dedup|display)\b/;
-
-export function addQueryStage(query: string, clause: string): string {
-  const match = LATE_STAGE.exec(query);
-  if (!match) {
-    return `${query.trimEnd()}\n| ${clause}`;
-  }
-  return `${query.slice(0, match.index).trimEnd()}\n| ${clause}\n${query.slice(match.index)}`;
 }
 
 const MONO_VALUE = /^(-?\d+(\.\d+)?|[0-9a-f]{8,}|[0-9a-f]{8}-[0-9a-f-]{27,}|\d{4}-\d\d-\d\d[T ][\d:.]+Z?)$/i;
@@ -175,25 +161,6 @@ export function histogram(points: Array<{ time: number; group: string }>, from: 
     bin.total++;
   }
   return result;
-}
-
-export interface SortKey {
-  field: string;
-  desc: boolean;
-}
-
-/** The query's last `sort` command, e.g. "sort @timestamp desc, level" → two keys. */
-export function parseSort(query: string): SortKey[] {
-  const all = Array.from(query.matchAll(/\|\s*sort\s+([^|]+)/gi));
-  const last = all[all.length - 1];
-  if (!last) {
-    return [];
-  }
-  return last[1]
-    .split(',')
-    .map((part) => part.trim().split(/\s+/))
-    .filter((words) => words[0])
-    .map(([field, dir]) => ({ field: field.replace(/^`|`$/g, ''), desc: dir?.toLowerCase() === 'desc' }));
 }
 
 /**
@@ -299,35 +266,10 @@ export function flattenMessage(message: string | undefined): Record<string, stri
   }
 }
 
-/**
- * Line after which addQueryStage puts a clause, for showing it in place before it is added: the
- * line before a sort/limit/... stage that starts its own line, the line holding one mid-line, or
- * the last line with text. 0 means before the first line.
- */
-export function queryStageLine(query: string): number {
-  const match = LATE_STAGE.exec(query);
-  const lines = query.split('\n');
-  if (!match) {
-    let last = lines.length;
-    while (last > 1 && lines[last - 1].trim() === '') {
-      last--;
-    }
-    return last;
-  }
-  const before = query.slice(0, match.index);
-  const line = before.split('\n').length;
-  const startsLine = before.slice(before.lastIndexOf('\n') + 1).trim() === '';
-  return startsLine ? line - 1 : line;
-}
-
 const NUMBER = /^-?\d+(\.\d+)?$/;
 
 function literal(value: string, numeric: boolean): string {
   return numeric && NUMBER.test(value) ? value : JSON.stringify(value);
-}
-
-function fieldRef(path: string): string {
-  return PLAIN_FIELD.test(path) ? path : `\`${path.replace(/`/g, '``')}\``;
 }
 
 /**

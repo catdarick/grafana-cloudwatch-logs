@@ -1,6 +1,6 @@
-import { lintQuery } from './lint';
+import { QueryProblem, lintQuery } from './lint';
 
-const problems = (query: string, severity?: 'error' | 'warning') =>
+const problems = (query: string, severity?: QueryProblem['severity']) =>
   lintQuery(query)
     .filter((p) => !severity || p.severity === severity)
     .map((p) => `${p.line}:${p.column} ${p.message}`);
@@ -41,46 +41,43 @@ describe('lintQuery', () => {
     "fields if(status >= 500, 'bad', 'ok') as health, concat(a, '-', b) as ab",
     'filter !ispresent(payment.eventType) or payment.status != "SUCCESS"',
     'fields @timestamp - 1000 as earlier, a - b as diff',
+    'fields jsonParse(@message) as js\n| unnest js.accounts into account\n| filter account.type = "internal"',
+    'relevantfields Controller, Path, Service where Time > 400',
+    'expand items\n| stats count(*) by items, host',
+    'fields srcAddr, hostname\n| lookup known_hosts ip_address as srcAddr OUTPUTNEW hostname, region',
+    'FIELDS a\n| FILTER a > 1\n| SORT a DESC\n| LIMIT 5',
+    'fields @timestamp\n# | sort x ascs\n| sort @timestamp desc',
     '',
   ])('passes %s', (query) => {
     expect(problems(query)).toEqual([]);
   });
 
-  it('flags a sort direction typo as an error', () => {
+  it('flags a word after a sort key as an error', () => {
     expect(problems('fields a\n| sort @timestamp desc, timestamp_internal ascs')).toEqual([
       '2:44 Expected asc or desc, found "ascs". Did you mean "asc"?',
     ]);
     expect(problems('sort a decs')).toEqual(['1:8 Expected asc or desc, found "decs". Did you mean "desc"?']);
+    expect(problems('sort col_name sdf')).toEqual(['1:15 Expected asc, desc or a comma before "sdf"']);
   });
 
-  it('flags a word after a sort key or a missing comma as an error', () => {
-    expect(problems('sort col_name des')).toEqual(['1:15 Expected asc or desc, found "des". Did you mean "desc"?']);
-    expect(problems('sort col_name sdf')).toEqual(['1:15 Expected asc, desc or a comma before "sdf"']);
+  it('flags a missing comma in a field list as an error', () => {
     expect(problems('fields a b, c as d e')).toEqual([
       '1:10 Missing comma before "b"',
       '1:20 Missing comma before "e"',
     ]);
   });
 
-  it('flags misspelled commands and filters without "filter" as errors', () => {
-    expect(problems('fields a | fitler a = 1')).toEqual(['1:12 Unknown command "fitler". Did you mean "filter"?']);
-    expect(problems('fields a | severity != "Debug"')).toEqual([
-      '1:12 Expected a command, found "severity". Missing "filter"?',
-    ]);
-    expect(problems('fields a | 42')).toEqual(['1:12 Expected a command, found 42']);
-    expect(problems('fields a | hfbvf x', 'error')).toEqual(['1:12 Unknown command "hfbvf"']);
-  });
-
   it('flags empty stages and commands without arguments as errors', () => {
     expect(problems('fields a |')).toEqual(['1:10 Expected a command after |']);
     expect(problems('fields a | | limit 5')).toEqual(['1:10 Expected a command after |']);
     expect(problems('fields a | sort')).toEqual(['1:12 "sort" needs arguments']);
+    expect(problems('fields a | 42')).toEqual(['1:12 Expected a command, found 42']);
   });
 
   it('flags unclosed strings, regexes, backticks and brackets as errors', () => {
-    expect(problems("filter a = 'x")).toEqual(["1:12 Unclosed string: ' has no closing '"]);
-    expect(problems('filter a like /x')).toEqual(['1:15 Unclosed regex: / has no closing / on this line']);
-    expect(problems('fields `a-b')).toEqual(['1:8 Unclosed backtick: ` has no closing ` on this line']);
+    expect(problems("filter a = 'x")).toEqual(["1:12 Unclosed string: ' has no closing pair"]);
+    expect(problems('filter a like /x')).toEqual(['1:15 Unclosed regex: / has no closing pair on this line']);
+    expect(problems('fields `a-b')).toEqual(['1:8 Unclosed backtick: ` has no closing pair on this line']);
     expect(problems('stats count(* by x')).toEqual(['1:12 Unclosed (']);
     expect(problems('fields a)')).toEqual(['1:9 Unexpected ): there is no ( for it to close']);
   });
@@ -88,7 +85,7 @@ describe('lintQuery', () => {
   it('flags a bad limit', () => {
     expect(problems('fields a | limit 0')).toEqual(['1:18 limit must be a whole number greater than 0']);
     expect(problems('fields a | limit 10 20')).toEqual(['1:21 limit takes a single number']);
-    expect(problems('fields a | limit 200000', 'warning')).toEqual(['1:18 limit can be at most 100,000']);
+    expect(problems('fields a | limit any')).toEqual(['1:18 limit any needs a number']);
   });
 
   it('flags commands out of their documented order', () => {
@@ -98,7 +95,23 @@ describe('lintQuery', () => {
     expect(problems('fields a | estimate | limit 5')).toEqual(['1:12 estimate must be the last command']);
   });
 
-  describe('warnings: likely causes, not certain', () => {
+  it('checks subqueries like the query itself', () => {
+    expect(problems("filter id in (SOURCE 'g' | sort x ascs | fields id)")).toEqual([
+      '1:35 Expected asc or desc, found "ascs". Did you mean "asc"?',
+    ]);
+  });
+
+  describe('warnings: not in the documented vocabulary', () => {
+    it('unknown commands, typo or not: AWS keeps adding commands', () => {
+      expect(problems('fields a | fitler a = 1', 'warning')).toEqual([
+        '1:12 Unknown command "fitler". Did you mean "filter"?',
+      ]);
+      expect(problems('fields a | hfbvf x', 'warning')).toEqual(['1:12 Unknown command "hfbvf"']);
+      expect(problems('fields a | severity != "Debug"', 'warning')).toEqual([
+        '1:12 Unknown command "severity". Missing "filter"?',
+      ]);
+    });
+
     it('unknown functions', () => {
       expect(problems('stats cnt(*)', 'warning')).toEqual(['1:7 Unknown function "cnt". Did you mean "count"?']);
       expect(problems('fields mystery(a)', 'warning')).toEqual(['1:8 Unknown function "mystery"']);
@@ -112,16 +125,22 @@ describe('lintQuery', () => {
       ]);
     });
 
+    it('a limit above the documented maximum', () => {
+      expect(problems('fields a | limit 200000', 'warning')).toEqual(['1:18 limit can be at most 100,000']);
+    });
+  });
+
+  describe('hints: valid, but often a mistake', () => {
     it('a hyphenated field name without backticks', () => {
-      expect(problems('fields request-id', 'warning')).toEqual([
+      expect(problems('fields request-id', 'hint')).toEqual([
         '1:8 This is request minus id. A field name with a hyphen needs backticks: `request-id`',
       ]);
     });
 
     it('a string that runs over lines', () => {
       expect(problems("filter a = 'x\n| filter b = 'y'")).toEqual([
-        "1:12 This string goes on to line 2. Is a closing ' missing on this line?",
-        "2:16 Unclosed string: ' has no closing '",
+        "1:12 This string goes on to line 2. Is a closing ' missing?",
+        "2:16 Unclosed string: ' has no closing pair",
       ]);
     });
   });

@@ -1,210 +1,134 @@
 import type { Monaco, monacoTypes } from '@grafana/ui';
+import { getCompletions } from './completion';
+import { findCommand, findFunction } from './spec';
+import { INITIAL_STATE, LexState, LineToken, cloneState, sameState, tokenizeLine } from './tokenize';
 
 export const LANGUAGE_ID = 'cloudwatch-logs-insights';
 
-// From https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax.html
-export const COMMANDS = [
-  'fields',
-  'display',
-  'filter',
-  'where',
-  'stats',
-  'sort',
-  'limit',
-  'parse',
-  'dedup',
-  'pattern',
-  'diff',
-  'unmask',
-  'anomaly',
-  'filterIndex',
-  'source',
-  'addtotals',
-  'relevantfields',
-  'expand',
-  'unnest',
-  'lookup',
-  'join',
-  'autoregress',
-  'logcompare',
-  'filldown',
-  'fillmissing',
-  'cidrlookup',
-  'outlier',
-  'accum',
-  'appendcols',
-  'sessionize',
-  'countFrequent',
-  'estimate',
-];
+/** Theme scope of a token: the same names Monarch grammars use, so the theme colours them. */
+export function tokenScope(t: LineToken): string {
+  switch (t.type) {
+    case 'comment':
+      return 'comment';
+    case 'string':
+      return 'string';
+    case 'regex':
+      return 'regexp';
+    case 'number':
+      return 'number';
+    case 'operator':
+      return 'operator';
+    case 'word':
+      if (t.text.startsWith('@')) {
+        return 'variable.predefined';
+      }
+      if (t.role === 'command') {
+        // An unknown word in command position is underlined by the checker, not coloured as one.
+        return findCommand(t.text) ? 'keyword' : 'identifier';
+      }
+      if (t.role === 'keyword') {
+        return 'keyword.operator';
+      }
+      if (t.role === 'function') {
+        return findFunction(t.text) ? 'type' : 'identifier';
+      }
+      return t.text.includes('`') ? 'variable' : 'identifier';
+    default:
+      return 'delimiter';
+  }
+}
 
-export const KEYWORDS = [
-  'by',
-  'as',
-  'asc',
-  'desc',
-  'like',
-  'not',
-  'and',
-  'or',
-  'in',
-  'ispresent',
-  'isempty',
-  'isblank',
-];
+class State implements monacoTypes.languages.IState {
+  constructor(readonly lex: LexState) {}
+  clone() {
+    return new State(cloneState(this.lex));
+  }
+  equals(other: monacoTypes.languages.IState) {
+    return other instanceof State && sameState(this.lex, other.lex);
+  }
+}
 
-export const FUNCTIONS = [
-  // aggregations
-  'avg',
-  'count',
-  'count_distinct',
-  'max',
-  'min',
-  'pct',
-  'stddev',
-  'sum',
-  'earliest',
-  'latest',
-  'sortsFirst',
-  'sortsLast',
-  // non-aggregations
-  'bin',
-  'datefloor',
-  'dateceil',
-  'fromMillis',
-  'toMillis',
-  'now',
-  'abs',
-  'ceil',
-  'floor',
-  'greatest',
-  'least',
-  'log',
-  'sqrt',
-  'concat',
-  'ltrim',
-  'rtrim',
-  'trim',
-  'strlen',
-  'toupper',
-  'tolower',
-  'substr',
-  'replace',
-  'strcontains',
-  'isValidIp',
-  'isValidIpV4',
-  'isValidIpV6',
-  'isIpInSubnet',
-  'isIpv4InSubnet',
-  'isIpv6InSubnet',
-  'coalesce',
-  'jsonParse',
-  'unnest',
-  'round',
-  'haversine',
-  'toNumber',
-  'toInt',
-  'toLong',
-  'toDouble',
-  'parseDate',
-  'formatDate',
-  'strftime',
-  'case',
-  'if',
-  'isNumeric',
-  'messageSize',
-  'queryStartTime',
-  'queryEndTime',
-  'queryTimeRange',
-  'jsonStringify',
-  'jsonArraySize',
-  'jsonArrayContains',
-  'ipv4ToNumber',
-  'isPrivateIP',
-  'isPublicIP',
-  'isReservedIP',
-  'regexReplace',
-  'startsWith',
-  'endsWith',
-  'urlencode',
-  'urldecode',
-  'base64encode',
-  'base64decode',
-  'split',
-  'hexToAscii',
-  'hexToDec',
-  'decToHex',
-  'countDistinct',
-  'values',
-  'variance',
-  'topk',
-  'md5',
-  'sha256',
-  'rate',
-  'countOverTime',
-  'sumOverTime',
-  'histogram',
-  'logGroups',
-  'dataSource',
-  'logGroupTags',
-];
+// Field names for autocomplete, per editor model: the provider is registered once for the language.
+const modelFields = new WeakMap<monacoTypes.editor.ITextModel, () => string[]>();
 
-export const SYSTEM_FIELDS = [
-  '@timestamp',
-  '@message',
-  '@logStream',
-  '@log',
-  '@ingestionTime',
-  '@ptr',
-  '@requestId',
-  '@duration',
-];
-
-const monarch: monacoTypes.languages.IMonarchLanguage = {
-  ignoreCase: true,
-  defaultToken: '',
-  commands: COMMANDS,
-  keywords: KEYWORDS,
-  functions: FUNCTIONS,
-  tokenizer: {
-    root: [
-      [/#.*$/, 'comment'],
-      [/@[\w.$]+/, 'variable.predefined'],
-      [/'([^'\\]|\\.)*'/, 'string'],
-      [/"([^"\\]|\\.)*"/, 'string'],
-      [/`([^`\\]|\\.)*`/, 'variable'],
-      [/\/(?:[^/\\\n]|\\.)+\/[a-z]*/, 'regexp'],
-      [/\d+(\.\d+)?(ms|s|m|h|d|w|mo|q|y)?\b/, 'number'],
-      [/[a-zA-Z_][\w.]*(?=\s*\()/, { cases: { '@functions': 'type', '@default': 'identifier' } }],
-      [
-        /[a-zA-Z_][\w.]*/,
-        { cases: { '@commands': 'keyword', '@keywords': 'keyword.operator', '@default': 'identifier' } },
-      ],
-      [/\|/, 'delimiter'],
-      [/[=<>!~+\-*/%^]+/, 'operator'],
-      [/[,()[\]]/, 'delimiter'],
-    ],
-  },
-};
+/** Lets autocomplete in this model offer these fields; returns a function that stops it. */
+export function setModelFields(model: monacoTypes.editor.ITextModel, getFields: () => string[]): () => void {
+  modelFields.set(model, getFields);
+  return () => modelFields.delete(model);
+}
 
 let registered = false;
 
-/** Registers the Logs Insights grammar once per page; Monaco keeps languages globally. */
+/**
+ * Registers the language once per page (Monaco keeps languages globally): highlighting and
+ * autocomplete both read queries with the tokenizer the checker uses, so they agree on what is a
+ * command, a field or a string.
+ */
 export function registerLogsInsights(monaco: Monaco) {
-  if (registered || monaco.languages.getLanguages().some((l) => l.id === LANGUAGE_ID)) {
-    registered = true;
+  if (registered) {
     return;
   }
-  monaco.languages.register({ id: LANGUAGE_ID });
-  monaco.languages.setMonarchTokensProvider(LANGUAGE_ID, monarch);
+  registered = true;
+  if (!monaco.languages.getLanguages().some((l) => l.id === LANGUAGE_ID)) {
+    monaco.languages.register({ id: LANGUAGE_ID });
+  }
+  monaco.languages.setTokensProvider(LANGUAGE_ID, {
+    getInitialState: () => new State(INITIAL_STATE),
+    tokenize: (line, state) => {
+      const result = tokenizeLine(line, (state as State).lex);
+      return {
+        tokens: result.tokens.map((t) => ({ startIndex: t.start, scopes: tokenScope(t) })),
+        endState: new State(result.state),
+      };
+    },
+  });
   monaco.languages.setLanguageConfiguration(LANGUAGE_ID, {
     comments: { lineComment: '#' },
-    brackets: [['(', ')']],
+    brackets: [
+      ['(', ')'],
+      ['[', ']'],
+    ],
     autoClosingPairs: [
       { open: '(', close: ')' },
+      { open: '[', close: ']' },
       { open: "'", close: "'", notIn: ['string'] },
       { open: '"', close: '"', notIn: ['string'] },
+      { open: '`', close: '`', notIn: ['string'] },
     ],
   });
-  registered = true;
+
+  const kinds = monaco.languages.CompletionItemKind;
+  const KIND = { command: kinds.Keyword, function: kinds.Function, field: kinds.Field, keyword: kinds.Operator };
+  monaco.languages.registerCompletionItemProvider(LANGUAGE_ID, {
+    triggerCharacters: [' ', '|', '(', ',', '@', '`', '.'],
+    provideCompletionItems: (model, position, context) => {
+      const offset = model.getOffsetAt(position);
+      const result = getCompletions(model.getValue(), offset, modelFields.get(model)?.() ?? []);
+      // A space only opens the list where it is the natural next step: a command, a sort direction.
+      const bySpace = context.triggerCharacter === ' ';
+      if (!result || (bySpace && result.context !== 'command' && result.context !== 'sortDirection')) {
+        return { suggestions: [] };
+      }
+      const start = model.getPositionAt(result.from);
+      const range = {
+        startLineNumber: start.lineNumber,
+        startColumn: start.column,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      };
+      return {
+        suggestions: result.items.map((item) => ({
+          label: item.label,
+          kind: KIND[item.kind],
+          insertText: item.insertText,
+          insertTextRules: item.snippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+          filterText: item.filterText,
+          detail: item.detail,
+          documentation: item.documentation,
+          sortText: item.sortText,
+          range,
+        })),
+      };
+    },
+  });
 }

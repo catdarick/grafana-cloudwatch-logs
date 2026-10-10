@@ -8,7 +8,8 @@ import {
   toDataQueryResponse,
 } from '@grafana/runtime';
 import { LogDetails, LogGroupRef, QueryResult, QueryStats } from '../types';
-import { parseSort, sortOrder } from '../utils/table';
+import { mentionsField, sortKeys } from '../language/parse';
+import { sortOrder } from '../utils/table';
 
 // Fields Grafana adds to every Logs Insights query (see pkg/tsdb/cloudwatch/log_actions.go).
 const INTERNAL_FIELD_SUFFIX = '__grafana_internal__';
@@ -147,7 +148,7 @@ export function framesToRows(
   query: string
 ): Pick<QueryResult, 'fields' | 'timeFields' | 'rows' | 'details' | 'stats'> {
   // Grafana prepends "fields @timestamp" to every query; hide it unless the user asked for it.
-  const showTimestamp = query.includes('@timestamp');
+  const showTimestamp = mentionsField(query, '@timestamp');
   const fields: string[] = [];
   const timeFields = new Set<string>();
   const rows: Array<Record<string, string>> = [];
@@ -198,7 +199,7 @@ export function framesToRows(
  * from several regions arrive one after another. Re-apply the query's sort to the merged rows.
  */
 export function applyQuerySort<T extends Pick<QueryResult, 'rows' | 'details'>>(result: T, query: string): T {
-  const keys = parseSort(query);
+  const keys = sortKeys(query);
   if (keys.length === 0) {
     return result;
   }

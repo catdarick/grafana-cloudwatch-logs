@@ -17,7 +17,6 @@ import {
   isMonoColumn,
   moveColumn,
   orderColumns,
-  parseSort,
   passesFilters,
   queryFilter,
   rowMatches,
@@ -28,6 +27,7 @@ import {
   valueFilterClause,
   visibleColumns,
 } from '../../utils/table';
+import { sortKeys } from '../../language/parse';
 import { ColumnMenu } from './ColumnMenu';
 import { ColumnsPicker } from './ColumnsPicker';
 import { ExportChoice, ExportDialog } from './ExportDialog';
@@ -286,7 +286,7 @@ export function ResultsTable({
   // Rows cut off by the limit: where they are on the time axis (when we can tell) and how many.
   const unloaded = useMemo(() => {
     const times = result.details.flatMap((d) => (d.timestamp === undefined ? [] : [d.timestamp]));
-    return unloadedRange(times, result.from, result.to, parseSort(result.query ?? ''), result.stats?.recordsMatched);
+    return unloadedRange(times, result.from, result.to, sortKeys(result.query ?? ''), result.stats?.recordsMatched);
   }, [result]);
 
   // The axis (query range or zoom), the hatched part of it, and bins over the rest, so the last bar

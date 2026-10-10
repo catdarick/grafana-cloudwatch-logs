@@ -5,6 +5,7 @@ import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService
 import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { QueryProblem, formatProblem, lintQuery } from '../../language/lint';
+import { addQueryStage } from '../../language/parse';
 import { knownRawFields, useRawFieldHistory } from '../../state/rawFieldHistory';
 import { useTableViews } from '../../state/tableViews';
 import { useWorkspace } from '../../state/useWorkspace';
@@ -13,7 +14,6 @@ import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
 import { errorMessage } from '../../utils/errors';
 import { DEFAULT_COST_PER_GB, estimateCost, formatCost } from '../../utils/cost';
-import { addQueryStage } from '../../utils/table';
 import { SHARE_PARAM_KEYS, fromShareParams, toShareParams } from '../../utils/shareLink';
 import { formatTime, isValidRange, toEpochRange, zoneLabel } from '../../utils/timeRange';
 import { LogGroups } from '../LogGroups/LogGroups';
@@ -151,7 +151,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const genericError = error === GENERIC_PLUGIN_ERROR;
   const problems = useMemo(() => (genericError ? lintQuery(tab.query) : []), [genericError, tab.query]);
   const errors = problems.filter((p) => p.severity === 'error');
-  const warnings = problems.filter((p) => p.severity === 'warning');
+  // Unknown words and what is valid but often a mistake: likely, not certain.
+  const possible = problems.filter((p) => p.severity !== 'error');
   const failed = Object.fromEntries(ws.state.tabs.map((t) => [t.id, Boolean(runError[t.id] ?? results[t.id]?.error)]));
 
   const zoomTo = (from: number, to: number) => {
@@ -228,7 +229,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 onApplyFilter={(clause) => ws.updateTab(tab.id, { query: addQueryStage(tab.query, clause) })}
                 relativeTime={tab.timeRange.mode === 'relative'}
                 onCopyLink={copyLink}
-                showWarnings={genericError}
+                showHints={genericError}
               />
               <section className={s.timeColumn}>
                 <TimeRangePicker
@@ -277,7 +278,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 <ProblemList title="The query has these errors:" problems={errors} className={s.problems} />
                 <ProblemList
                   title={errors.length > 0 ? 'It may also be:' : 'Possible causes:'}
-                  problems={warnings}
+                  problems={possible}
                   className={s.problems}
                 />
               </>

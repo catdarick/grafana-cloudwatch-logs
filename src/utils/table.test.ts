@@ -1,6 +1,5 @@
 import {
   Row,
-  addQueryStage,
   estimateWidth,
   flattenJson,
   flattenMessage,
@@ -9,9 +8,7 @@ import {
   isMonoColumn,
   moveColumn,
   orderColumns,
-  parseSort,
   queryFilter,
-  queryStageLine,
   searchClause,
   sortOrder,
   unloadedRange,
@@ -81,12 +78,9 @@ describe('query helpers', () => {
     expect(queryFilter('x', null, false)).toBe('filter isempty(x)');
   });
 
-  it('inserts the clause before sort and limit', () => {
-    expect(addQueryStage('fields a\n| sort @timestamp desc\n| limit 20', 'filter a = 1')).toBe(
-      'fields a\n| filter a = 1\n| sort @timestamp desc\n| limit 20'
-    );
-    expect(addQueryStage('fields a, b | limit 50', 'filter a = 1')).toBe('fields a, b\n| filter a = 1\n| limit 50');
-    expect(addQueryStage('fields a', 'filter a = 1')).toBe('fields a\n| filter a = 1');
+  it('quotes field names the way the documentation requires', () => {
+    expect(queryFilter('request-id', 'x', false)).toBe('filter `request-id` = "x"');
+    expect(queryFilter('@aws.tag.a:b', 'x', false)).toBe('filter @`aws.tag.a:b` = "x"');
   });
 });
 
@@ -122,15 +116,6 @@ describe('histogram', () => {
 });
 
 describe('sorting', () => {
-  it('reads the last sort command', () => {
-    expect(parseSort('fields a | sort @timestamp desc | limit 5')).toEqual([{ field: '@timestamp', desc: true }]);
-    expect(parseSort('stats count(*) as n by x\n| sort n desc, x')).toEqual([
-      { field: 'n', desc: true },
-      { field: 'x', desc: false },
-    ]);
-    expect(parseSort('fields a | limit 5')).toEqual([]);
-  });
-
   it('orders numbers numerically and puts missing values last', () => {
     const values = ['10', '9', undefined, '100'];
     expect(sortOrder(4, [{ field: 'n', desc: true }], (i) => values[i])).toEqual([3, 0, 1, 2]);
@@ -204,17 +189,5 @@ describe('filter clauses', () => {
     expect(searchClause('a.b/c', ['message', 'pod'])).toBe(
       'filter message like /(?i)a\\.b\\/c/ or pod like /(?i)a\\.b\\/c/'
     );
-  });
-});
-
-describe('queryStageLine', () => {
-  it('points at the line before a sort that starts its own line', () => {
-    expect(queryStageLine('fields a\n| filter b = 1\n| sort @timestamp desc\n| limit 5')).toBe(2);
-  });
-  it('points at the line holding a mid-line sort', () => {
-    expect(queryStageLine('fields a | sort @timestamp desc | limit 5\n\n')).toBe(1);
-  });
-  it('falls back to the last line with text', () => {
-    expect(queryStageLine('fields a\n| filter b = 1\n\n\n')).toBe(2);
   });
 });
