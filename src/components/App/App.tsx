@@ -8,6 +8,7 @@ import { useWorkspace } from '../../state/useWorkspace';
 import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
+import { errorMessage } from '../../utils/errors';
 import { DEFAULT_COST_PER_GB, estimateCost, formatCost } from '../../utils/cost';
 import { addQueryStage } from '../../utils/table';
 import { SHARE_PARAM_KEYS, fromShareParams, toShareParams } from '../../utils/shareLink';
@@ -370,20 +371,6 @@ function formatBytes(bytes: number): string {
 
 function isCancelled(e: unknown): boolean {
   return Boolean(e && typeof e === 'object' && 'cancelled' in e && (e as { cancelled?: boolean }).cancelled);
-}
-
-function errorMessage(e: unknown): string {
-  if (e && typeof e === 'object') {
-    const data = (e as { data?: { message?: string; results?: Record<string, { error?: string }> } }).data;
-    const resultError = data?.results && Object.values(data.results).find((r) => r.error)?.error;
-    if (resultError) {
-      return resultError;
-    }
-    if (data?.message) {
-      return data.message;
-    }
-  }
-  return e instanceof Error ? e.message : String(e);
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({

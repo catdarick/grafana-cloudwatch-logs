@@ -5,6 +5,7 @@ import { Alert, Button, Checkbox, Icon, IconButton, Input, Toggletip, useStyles2
 import { fetchLogGroups } from '../../api/cloudwatch';
 import { sameGroup } from '../../state/useWorkspace';
 import { LogGroupRef } from '../../types';
+import { errorMessage } from '../../utils/errors';
 
 interface Props {
   datasourceUid?: string;
@@ -133,16 +134,6 @@ export function LogGroups({
       </div>
     </section>
   );
-}
-
-function errorMessage(e: unknown): string {
-  if (e && typeof e === 'object' && 'data' in e) {
-    const data = (e as { data?: { message?: string } }).data;
-    if (data?.message) {
-      return data.message;
-    }
-  }
-  return e instanceof Error ? e.message : String(e);
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
