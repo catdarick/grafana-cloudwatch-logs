@@ -1,10 +1,10 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { Virtualizer, useVirtualizer } from '@tanstack/react-virtual';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
 import { Button, Checkbox, ClipboardButton, Icon, IconButton, Input, useStyles2 } from '@grafana/ui';
-import { ColumnSettings, QueryResult, TableView } from '../../types';
+import { ColumnSettings, LogDetails, QueryResult, TableView } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
 import { downloadCsv, toCsv } from '../../utils/csv';
 import { formatTime } from '../../utils/timeRange';
@@ -60,6 +60,45 @@ const FLEX_MIN_WIDTH = 240;
 const LEVEL_FIELDS = ['severity', 'level', 'loglevel', 'log_level', 'lvl'];
 
 type Level = 'error' | 'warning' | 'info' | 'debug' | undefined;
+type Styles = ReturnType<typeof getStyles>;
+type RowVirtualizer = Virtualizer<HTMLDivElement, Element>;
+
+interface RowActions {
+  toggleExpanded: (index: number) => void;
+  toggleUnclamped: (index: number) => void;
+  filterValue: (field: string, value: string, exclude: boolean) => void;
+  filterByLogValue: (path: string, value: unknown, exclude: boolean) => void;
+  addQueryFilter: (path: string, value: unknown, negate: boolean) => void;
+  canFilterTable: (path: string) => boolean;
+}
+
+/**
+ * Work on a result that outlives the table: switching back to a tab mounts its table again, and
+ * parsing every log or formatting every time again would make that slow. One value per name,
+ * redone when its key (what else it depends on) changes.
+ */
+const resultCache = new WeakMap<QueryResult, Map<string, { key: string; value: unknown }>>();
+
+function cachedFor<T>(result: QueryResult, name: string, key: string, compute: () => T): T {
+  let cache = resultCache.get(result);
+  if (!cache) {
+    cache = new Map();
+    resultCache.set(result, cache);
+  }
+  const hit = cache.get(name);
+  if (hit && hit.key === key) {
+    return hit.value as T;
+  }
+  const value = compute();
+  cache.set(name, { key, value });
+  return value;
+}
+
+function toggled(set: Set<number>, index: number): Set<number> {
+  const next = new Set(set);
+  next.has(index) ? next.delete(index) : next.add(index);
+  return next;
+}
 
 function rowLevel(row: Record<string, string>, levelField?: string): Level {
   const value = levelField ? row[levelField]?.toLowerCase() : undefined;
@@ -106,32 +145,41 @@ export function ResultsTable({
   // Rows whose long cells are shown in full instead of clamped to two lines.
   const [unclamped, setUnclamped] = useState<Set<number>>(() => initialView?.unclamped ?? new Set());
   const [draftWidths, setDraftWidths] = useState<Record<string, number>>();
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // State rather than a ref: the rows' virtualizer needs it, and mounts before a ref would be set.
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   // Kept out of state: scrolling should not re-render the table.
   const scrollPosition = useRef({ top: initialView?.scrollTop ?? 0, left: initialView?.scrollLeft ?? 0 });
   const [viewWidth, setViewWidth] = useState(0);
 
   // Expanded details are pinned to the visible part of a wide table, so they need its width.
   useEffect(() => {
-    const el = scrollRef.current;
+    const el = scrollElement;
     if (!el) {
       return;
     }
     const observer = new ResizeObserver(() => setViewWidth(el.clientWidth));
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [scrollElement]);
 
   // Time fields arrive as epoch millis; show them in the selected zone.
   // Leaves of each JSON log event by dotted path: candidates for extra columns and table filters.
-  const rawFlat = useMemo(() => result.details.map((d) => flattenMessage(d.message)), [result.details]);
-  const rawKeys = useMemo(() => {
-    const counts = new Map<string, number>();
-    rawFlat.forEach((row) => Object.keys(row).forEach((k) => counts.set(k, (counts.get(k) ?? 0) + 1)));
-    return Array.from(counts, ([name, count]) => ({ name, count }))
-      .filter((k) => !result.fields.includes(k.name))
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  }, [rawFlat, result.fields]);
+  // Cached per result, not just memoized: the table is mounted again each time its tab is shown.
+  const rawFlat = useMemo(
+    () => cachedFor(result, 'rawFlat', '', () => result.details.map((d) => flattenMessage(d.message))),
+    [result]
+  );
+  const rawKeys = useMemo(
+    () =>
+      cachedFor(result, 'rawKeys', '', () => {
+        const counts = new Map<string, number>();
+        rawFlat.forEach((row) => Object.keys(row).forEach((k) => counts.set(k, (counts.get(k) ?? 0) + 1)));
+        return Array.from(counts, ([name, count]) => ({ name, count }))
+          .filter((k) => !result.fields.includes(k.name))
+          .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+      }),
+    [rawFlat, result]
+  );
 
   // Query fields plus the ones added from the raw log.
   const extra = useMemo(
@@ -140,23 +188,26 @@ export function ResultsTable({
   );
   const fields = useMemo(() => [...result.fields, ...extra], [result.fields, extra]);
 
+  const displayKey = `${timeZone}\n${extra.join('\n')}`;
   const displayRows = useMemo(
     () =>
-      result.rows.map((row, i) => {
-        const out = { ...row };
-        for (const f of extra) {
-          if (rawFlat[i][f] !== undefined) {
-            out[f] = rawFlat[i][f];
+      cachedFor(result, 'displayRows', displayKey, () =>
+        result.rows.map((row, i) => {
+          const out = { ...row };
+          for (const f of extra) {
+            if (rawFlat[i][f] !== undefined) {
+              out[f] = rawFlat[i][f];
+            }
           }
-        }
-        for (const f of result.timeFields) {
-          if (out[f] !== undefined) {
-            out[f] = formatTime(Number(out[f]), timeZone, 'YYYY-MM-DD HH:mm:ss.SSS');
+          for (const f of result.timeFields) {
+            if (out[f] !== undefined) {
+              out[f] = formatTime(Number(out[f]), timeZone, 'YYYY-MM-DD HH:mm:ss.SSS');
+            }
           }
-        }
-        return out;
-      }),
-    [result, timeZone, extra, rawFlat]
+          return out;
+        })
+      ),
+    [result, displayKey, timeZone, extra, rawFlat]
   );
 
   const cols = useMemo(() => visibleColumns(fields, columns), [fields, columns]);
@@ -164,14 +215,18 @@ export function ResultsTable({
   const levelField = fields.find((f) => LEVEL_FIELDS.includes(f.toLowerCase()));
 
   // Per column: starting width from content, and whether it holds ids/numbers/times.
-  const columnInfo = useMemo(() => {
-    const info: Record<string, { width: number; mono: boolean }> = {};
-    for (const f of fields) {
-      const values = displayRows.map((r) => r[f] ?? '');
-      info[f] = { width: estimateWidth(f, values), mono: result.timeFields.includes(f) || isMonoColumn(values) };
-    }
-    return info;
-  }, [displayRows, fields, result.timeFields]);
+  const columnInfo = useMemo(
+    () =>
+      cachedFor(result, 'columnInfo', displayKey, () => {
+        const info: Record<string, { width: number; mono: boolean }> = {};
+        for (const f of fields) {
+          const values = displayRows.map((r) => r[f] ?? '');
+          info[f] = { width: estimateWidth(f, values), mono: result.timeFields.includes(f) || isMonoColumn(values) };
+        }
+        return info;
+      }),
+    [result, displayKey, displayRows, fields]
+  );
 
   const inZoom = useMemo(
     () =>
@@ -261,34 +316,27 @@ export function ResultsTable({
     return unloaded ? undefined : `${loaded} loaded logs here, the range may have more`;
   }, [result, zoom, inZoom, histo, unloaded]);
 
-  // No React Compiler here anyway; the virtualizer is re-read on every render by design.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 34,
-    overscan: 12,
-    getItemKey: (i) => rows[i],
-    initialOffset: () => scrollPosition.current.top,
-    initialMeasurementsCache: initialView?.measurements,
-  });
+  // Lives in TableRows, so scrolling re-renders only the rows; read here for search and saving.
+  const virtualizer = useRef<RowVirtualizer | null>(null);
 
   // Hand back how the table was left, read from refs so it is the latest when the table goes away.
   const latestView = useRef<(() => TableView) | null>(null);
-  latestView.current = () => ({
-    filters,
-    zoom,
-    search,
-    hideNonMatching,
-    current,
-    expanded,
-    unclamped,
-    scrollTop: scrollPosition.current.top,
-    scrollLeft: scrollPosition.current.left,
-    measurements: virtualizer.takeSnapshot(),
-  });
   const saveView = useRef(onSaveView);
-  saveView.current = onSaveView;
+  useLayoutEffect(() => {
+    latestView.current = () => ({
+      filters,
+      zoom,
+      search,
+      hideNonMatching,
+      current,
+      expanded,
+      unclamped,
+      scrollTop: scrollPosition.current.top,
+      scrollLeft: scrollPosition.current.left,
+      measurements: virtualizer.current?.takeSnapshot(),
+    });
+    saveView.current = onSaveView;
+  });
   useEffect(() => () => saveView.current?.(latestView.current!()), []);
 
   useEffect(() => {
@@ -299,7 +347,7 @@ export function ResultsTable({
     if (currentRow !== undefined) {
       const position = rows.indexOf(currentRow);
       if (position >= 0) {
-        virtualizer.scrollToIndex(position, { align: 'center' });
+        virtualizer.current?.scrollToIndex(position, { align: 'center' });
       }
     }
     // Scroll only when asked (typing or prev/next), not on every re-render.
@@ -375,11 +423,19 @@ export function ResultsTable({
     filterValue(path, value === null || value === undefined ? '' : String(value), exclude);
   };
 
-  const toggleIn = (set: Set<number>, update: (s: Set<number>) => void, index: number) => {
-    const next = new Set(set);
-    next.has(index) ? next.delete(index) : next.add(index);
-    update(next);
-  };
+  // What rows can do, behind a ref that always holds the latest handlers: rows are memoized and
+  // must not re-render just because these closures are new.
+  const rowActions = useRef<RowActions | null>(null);
+  useLayoutEffect(() => {
+    rowActions.current = {
+      toggleExpanded: (index) => setExpanded((set) => toggled(set, index)),
+      toggleUnclamped: (index) => setUnclamped((set) => toggled(set, index)),
+      filterValue,
+      filterByLogValue,
+      addQueryFilter: (path, value, negate) => onAddQueryFilter(queryFilter(path, value, negate)),
+      canFilterTable: (path) => fields.includes(path) || rawKeys.some((k) => k.name === path),
+    };
+  });
 
   // Widths: what the user dragged, else an estimate from content. The widest unsized column
   // takes the remaining space so the table always fills the panel.
@@ -427,27 +483,6 @@ export function ResultsTable({
     }
   };
 
-  const highlight = (text: string, index: number) =>
-    needle && matchSet.has(index)
-      ? splitMatches(text, needle).map((part, i) =>
-          part.match ? (
-            <mark key={i} className={s.mark}>
-              {part.text}
-            </mark>
-          ) : (
-            part.text
-          )
-        )
-      : text;
-
-  const renderCell = (field: string, value: string, index: number) => {
-    if (field === levelField && value) {
-      const level = rowLevel(displayRows[index], levelField) ?? 'none';
-      return <span className={cx(s.badge, s.badgeLevel[level])}>{highlight(value, index)}</span>;
-    }
-    return highlight(value, index);
-  };
-
   const exportCsv = ({ rows: which, fields }: ExportChoice) => {
     const indexes = which === 'shown' ? rows : displayRows.map((_, i) => i);
     // Raw parts of the log event come from the row details; the rest are table values as shown.
@@ -466,23 +501,6 @@ export function ResultsTable({
 
   const filterCount = Object.keys(filters).length;
   const total = result.rows.length;
-  const items = virtualizer.getVirtualItems();
-  const padTop = items.length ? items[0].start : 0;
-  const padBottom = items.length ? virtualizer.getTotalSize() - items[items.length - 1].end : 0;
-
-  // Back to where the table was scrolled when it was last shown. The first render has no rows yet
-  // (the virtualizer has not measured the scroll area), so wait until they are on the page.
-  const scrollRestored = useRef(false);
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (scrollRestored.current || !el || (rows.length > 0 && items.length === 0)) {
-      return;
-    }
-    scrollRestored.current = true;
-    el.scrollTop = scrollPosition.current.top;
-    el.scrollLeft = scrollPosition.current.left;
-  });
-
   return (
     <div className={s.wrapper}>
       {zoom && (
@@ -604,7 +622,7 @@ export function ResultsTable({
 
       <div
         className={s.scroll}
-        ref={scrollRef}
+        ref={setScrollElement}
         onScroll={(e) => {
           scrollPosition.current = { top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft };
         }}
@@ -654,115 +672,324 @@ export function ResultsTable({
               ))}
             </tr>
           </thead>
-          {padTop > 0 && (
-            <tbody>
-              <tr style={{ height: padTop }} />
-            </tbody>
-          )}
-          {items.map((item) => {
-            const index = rows[item.index];
-            const row = displayRows[index];
-            const details = result.details[index];
-            const isOpen = expanded.has(index);
-            return (
-              <tbody key={item.key} data-index={item.index} ref={virtualizer.measureElement}>
-                <tr
-                  className={cx(
-                    s.row,
-                    item.index % 2 === 1 && s.odd,
-                    s.level[rowLevel(row, levelField) ?? 'none'],
-                    matchSet.has(index) && s.match,
-                    index === currentRow && s.current
-                  )}
-                >
-                  <td className={s.expandCell} onClick={() => toggleIn(expanded, setExpanded, index)}>
-                    <button
-                      type="button"
-                      className={cx(s.expandButton, isOpen && s.expandOpen)}
-                      aria-label="Toggle row details"
-                      aria-expanded={isOpen}
-                      title={isOpen ? 'Hide the log' : 'Show the whole log'}
-                    >
-                      <Icon name="angle-right" />
-                    </button>
-                  </td>
-                  {cols.map((f) => {
-                    const value = row[f] ?? '';
-                    return (
-                      <td key={f} className={cx(columnInfo[f]?.mono && s.mono)}>
-                        <div
-                          className={cx(s.cellText, !unclamped.has(index) && s.clamp)}
-                          onClick={() => {
-                            // Clicking expands long text; selecting text to copy should not.
-                            if (!window.getSelection()?.toString()) {
-                              toggleIn(unclamped, setUnclamped, index);
-                            }
-                          }}
-                        >
-                          {renderCell(f, value, index)}
-                        </div>
-                        {value && (
-                          <div className={s.cellActions}>
-                            <IconButton
-                              name="search-plus"
-                              size="sm"
-                              tooltip="Show only this value"
-                              onClick={() => filterValue(f, value, false)}
-                            />
-                            <IconButton
-                              name="search-minus"
-                              size="sm"
-                              tooltip="Hide this value"
-                              onClick={() => filterValue(f, value, true)}
-                            />
-                            <IconButton
-                              name="copy"
-                              size="sm"
-                              tooltip="Copy value"
-                              onClick={() => copyWithToast(result.rows[index][f] ?? value)}
-                            />
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-                {isOpen && (
-                  <tr className={s.detailsRow}>
-                    <td />
-                    <td colSpan={cols.length}>
-                      <LogDetailsView
-                        width={viewWidth - EXPAND_WIDTH - 24}
-                        log={fullLog(row, details)}
-                        logGroup={details?.logGroup}
-                        logStream={details?.logStream}
-                        canFilterTable={(path) => fields.includes(path) || rawKeys.some((k) => k.name === path)}
-                        onTableFilter={(path, value, exclude) => filterByLogValue(path, value, exclude)}
-                        onQueryFilter={(path, value, negate) => onAddQueryFilter(queryFilter(path, value, negate))}
-                      />
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            );
-          })}
-          {padBottom > 0 && (
-            <tbody>
-              <tr style={{ height: padBottom }} />
-            </tbody>
-          )}
-          {rows.length === 0 && (
-            <tbody>
-              <tr>
-                <td colSpan={cols.length + 1} className={s.empty} style={{ textAlign: 'center' }}>
-                  {total === 0 ? 'No rows' : 'No rows match the current filters'}
-                </td>
-              </tr>
-            </tbody>
-          )}
+          <TableRows
+            s={s}
+            scrollElement={scrollElement}
+            virtualizerRef={virtualizer}
+            initialOffset={initialView?.scrollTop ?? 0}
+            initialLeft={initialView?.scrollLeft ?? 0}
+            initialMeasurements={initialView?.measurements}
+            rows={rows}
+            displayRows={displayRows}
+            rawRows={result.rows}
+            details={result.details}
+            cols={cols}
+            columnInfo={columnInfo}
+            levelField={levelField}
+            needle={needle}
+            matchSet={matchSet}
+            currentRow={currentRow}
+            expanded={expanded}
+            unclamped={unclamped}
+            viewWidth={viewWidth}
+            actions={rowActions}
+            emptyText={total === 0 ? 'No rows' : 'No rows match the current filters'}
+          />
         </table>
       </div>
     </div>
+  );
+}
+
+interface TableRowsProps {
+  s: Styles;
+  scrollElement: HTMLDivElement | null;
+  /** Filled with the virtualizer, for the table to scroll to search matches and save measurements. */
+  virtualizerRef: React.MutableRefObject<RowVirtualizer | null>;
+  initialOffset: number;
+  initialLeft: number;
+  initialMeasurements?: TableView['measurements'];
+  /** Indexes into displayRows, in display order. */
+  rows: number[];
+  displayRows: Array<Record<string, string>>;
+  /** Rows as the query returned them, for copying values as they are. */
+  rawRows: Array<Record<string, string>>;
+  details: LogDetails[];
+  cols: string[];
+  columnInfo: Record<string, { width: number; mono: boolean }>;
+  levelField?: string;
+  needle: string;
+  matchSet: Set<number>;
+  currentRow?: number;
+  expanded: Set<number>;
+  unclamped: Set<number>;
+  viewWidth: number;
+  actions: React.RefObject<RowActions | null>;
+  emptyText: string;
+}
+
+/**
+ * The rows on screen. Owns the virtualizer, so a scroll re-renders this and not the whole table
+ * (histogram, toolbar, headers); rows already on screen are memoized and skip re-rendering.
+ */
+const TableRows = React.memo(function TableRows({
+  s,
+  scrollElement,
+  virtualizerRef,
+  initialOffset,
+  initialLeft,
+  initialMeasurements,
+  rows,
+  displayRows,
+  rawRows,
+  details,
+  cols,
+  columnInfo,
+  levelField,
+  needle,
+  matchSet,
+  currentRow,
+  expanded,
+  unclamped,
+  viewWidth,
+  actions,
+  emptyText,
+}: TableRowsProps) {
+  // No React Compiler here anyway; the virtualizer is re-read on every render by design.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollElement,
+    estimateSize: () => 34,
+    overscan: 12,
+    getItemKey: (i) => rows[i],
+    initialOffset,
+    initialMeasurementsCache: initialMeasurements,
+  });
+  virtualizerRef.current = virtualizer;
+
+  const items = virtualizer.getVirtualItems();
+  const padTop = items.length ? items[0].start : 0;
+  const padBottom = items.length ? virtualizer.getTotalSize() - items[items.length - 1].end : 0;
+
+  // Back to where the table was scrolled when it was last shown. The first render has no rows yet
+  // (the virtualizer has not measured the scroll area), so wait until they are on the page.
+  const scrollRestored = useRef(false);
+  useLayoutEffect(() => {
+    const el = scrollElement;
+    if (scrollRestored.current || !el || (rows.length > 0 && items.length === 0)) {
+      return;
+    }
+    scrollRestored.current = true;
+    el.scrollTop = initialOffset;
+    el.scrollLeft = initialLeft;
+  });
+
+  return (
+    <>
+      {padTop > 0 && (
+        <tbody>
+          <tr style={{ height: padTop }} />
+        </tbody>
+      )}
+      {items.map((item) => {
+        const index = rows[item.index];
+        const isMatch = matchSet.has(index);
+        const isOpen = expanded.has(index);
+        return (
+          <LogRow
+            key={item.key}
+            s={s}
+            position={item.index}
+            index={index}
+            measure={virtualizer.measureElement}
+            row={displayRows[index]}
+            rawRow={rawRows[index]}
+            details={details[index]}
+            cols={cols}
+            columnInfo={columnInfo}
+            levelField={levelField}
+            needle={isMatch ? needle : ''}
+            isCurrent={index === currentRow}
+            isOpen={isOpen}
+            isUnclamped={unclamped.has(index)}
+            detailsWidth={isOpen ? viewWidth - EXPAND_WIDTH - 24 : 0}
+            actions={actions}
+          />
+        );
+      })}
+      {padBottom > 0 && (
+        <tbody>
+          <tr style={{ height: padBottom }} />
+        </tbody>
+      )}
+      {rows.length === 0 && (
+        <tbody>
+          <tr>
+            <td colSpan={cols.length + 1} className={s.empty} style={{ textAlign: 'center' }}>
+              {emptyText}
+            </td>
+          </tr>
+        </tbody>
+      )}
+    </>
+  );
+});
+
+interface LogRowProps {
+  s: Styles;
+  /** Place in the shown rows, for the virtualizer and striping. */
+  position: number;
+  /** Index into the result's rows. */
+  index: number;
+  measure: (el: Element | null) => void;
+  row: Record<string, string>;
+  rawRow: Record<string, string>;
+  details?: LogDetails;
+  cols: string[];
+  columnInfo: Record<string, { width: number; mono: boolean }>;
+  levelField?: string;
+  /** Search text when this row matches it, else empty. */
+  needle: string;
+  isCurrent: boolean;
+  isOpen: boolean;
+  isUnclamped: boolean;
+  detailsWidth: number;
+  actions: React.RefObject<RowActions | null>;
+}
+
+const LogRow = React.memo(function LogRow({
+  s,
+  position,
+  index,
+  measure,
+  row,
+  rawRow,
+  details,
+  cols,
+  columnInfo,
+  levelField,
+  needle,
+  isCurrent,
+  isOpen,
+  isUnclamped,
+  detailsWidth,
+  actions,
+}: LogRowProps) {
+  // Cell actions are buttons with tooltips, costly to mount for every cell scrolled past, so they
+  // are only rendered for the row under the mouse.
+  const [hovered, setHovered] = useState(false);
+  const level = rowLevel(row, levelField);
+  const act = () => actions.current!;
+
+  const highlight = (text: string) =>
+    needle
+      ? splitMatches(text, needle).map((part, i) =>
+          part.match ? (
+            <mark key={i} className={s.mark}>
+              {part.text}
+            </mark>
+          ) : (
+            part.text
+          )
+        )
+      : text;
+
+  return (
+    <tbody data-index={position} ref={measure}>
+      <tr
+        className={cx(
+          s.row,
+          position % 2 === 1 && s.odd,
+          s.level[level ?? 'none'],
+          needle && s.match,
+          isCurrent && s.current
+        )}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        <td className={s.expandCell} onClick={() => act().toggleExpanded(index)}>
+          <button
+            type="button"
+            className={cx(s.expandButton, isOpen && s.expandOpen)}
+            aria-label="Toggle row details"
+            aria-expanded={isOpen}
+            title={isOpen ? 'Hide the log' : 'Show the whole log'}
+          >
+            <Chevron />
+          </button>
+        </td>
+        {cols.map((f) => {
+          const value = row[f] ?? '';
+          return (
+            <td key={f} className={cx(columnInfo[f]?.mono && s.mono)}>
+              <div
+                className={cx(s.cellText, !isUnclamped && s.clamp)}
+                onClick={() => {
+                  // Clicking expands long text; selecting text to copy should not.
+                  if (!window.getSelection()?.toString()) {
+                    act().toggleUnclamped(index);
+                  }
+                }}
+              >
+                {f === levelField && value ? (
+                  <span className={cx(s.badge, s.badgeLevel[level ?? 'none'])}>{highlight(value)}</span>
+                ) : (
+                  highlight(value)
+                )}
+              </div>
+              {value && hovered && (
+                <div className={s.cellActions}>
+                  <IconButton
+                    name="search-plus"
+                    size="sm"
+                    tooltip="Show only this value"
+                    onClick={() => act().filterValue(f, value, false)}
+                  />
+                  <IconButton
+                    name="search-minus"
+                    size="sm"
+                    tooltip="Hide this value"
+                    onClick={() => act().filterValue(f, value, true)}
+                  />
+                  <IconButton
+                    name="copy"
+                    size="sm"
+                    tooltip="Copy value"
+                    onClick={() => copyWithToast(rawRow[f] ?? value)}
+                  />
+                </div>
+              )}
+            </td>
+          );
+        })}
+      </tr>
+      {isOpen && (
+        <tr className={s.detailsRow}>
+          <td />
+          <td colSpan={cols.length}>
+            <LogDetailsView
+              width={detailsWidth}
+              log={fullLog(row, details)}
+              logGroup={details?.logGroup}
+              logStream={details?.logStream}
+              canFilterTable={(path) => act().canFilterTable(path)}
+              onTableFilter={(path, value, exclude) => act().filterByLogValue(path, value, exclude)}
+              onQueryFilter={(path, value, negate) => act().addQueryFilter(path, value, negate)}
+            />
+          </td>
+        </tr>
+      )}
+    </tbody>
+  );
+});
+
+/** The row toggle's chevron, drawn inline: an Icon per row is noticeably slower to mount. */
+function Chevron() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M14.83 11.29 10.59 7.05a1 1 0 0 0-1.42 0 1 1 0 0 0 0 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1 1 0 0 0 0-1.42Z" />
+    </svg>
   );
 }
 

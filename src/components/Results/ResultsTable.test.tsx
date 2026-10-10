@@ -60,7 +60,9 @@ describe('ResultsTable view', () => {
     fireEvent.change(searchBox(), { target: { value: 'o' } });
     fireEvent.click(hideBox());
     fireEvent.click(screen.getAllByRole('button', { name: 'Toggle row details' })[0]);
-    // Keeps only the "info" rows.
+    // Cell actions are only there for the row under the mouse. This keeps only the "info" rows.
+    expect(screen.queryByLabelText('Show only this value')).not.toBeInTheDocument();
+    fireEvent.mouseEnter(container.querySelector('tbody[data-index="0"] tr')!);
     fireEvent.click(screen.getAllByLabelText('Show only this value')[0]);
     const scroll = scrollArea(container);
     Object.defineProperty(scroll, 'scrollTop', { value: 120, configurable: true });
@@ -92,7 +94,7 @@ describe('ResultsTable view', () => {
         current: 0,
         expanded: new Set([2]),
         unclamped: new Set(),
-        scrollTop: 120,
+        scrollTop: 20,
         scrollLeft: 40,
       },
     });
@@ -103,7 +105,7 @@ describe('ResultsTable view', () => {
     expect(screen.getByRole('button', { name: 'Reset zoom' })).toBeInTheDocument();
     expect(screen.getByText('1 of 3 rows')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Toggle row details' })).toHaveAttribute('aria-expanded', 'true');
-    expect(scrollTop).toHaveBeenCalledWith(120);
+    expect(scrollTop).toHaveBeenCalledWith(20);
     expect(scrollLeft).toHaveBeenCalledWith(40);
     scrollTop.mockRestore();
     scrollLeft.mockRestore();
