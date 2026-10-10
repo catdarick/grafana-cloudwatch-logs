@@ -11,6 +11,7 @@ import {
   orderColumns,
   parseSort,
   queryFilter,
+  queryStageLine,
   searchClause,
   sortOrder,
   unloadedRange,
@@ -203,5 +204,17 @@ describe('filter clauses', () => {
     expect(searchClause('a.b/c', ['message', 'pod'])).toBe(
       'filter message like /(?i)a\\.b\\/c/ or pod like /(?i)a\\.b\\/c/'
     );
+  });
+});
+
+describe('queryStageLine', () => {
+  it('points at the line before a sort that starts its own line', () => {
+    expect(queryStageLine('fields a\n| filter b = 1\n| sort @timestamp desc\n| limit 5')).toBe(2);
+  });
+  it('points at the line holding a mid-line sort', () => {
+    expect(queryStageLine('fields a | sort @timestamp desc | limit 5\n\n')).toBe(1);
+  });
+  it('falls back to the last line with text', () => {
+    expect(queryStageLine('fields a\n| filter b = 1\n\n\n')).toBe(2);
   });
 });

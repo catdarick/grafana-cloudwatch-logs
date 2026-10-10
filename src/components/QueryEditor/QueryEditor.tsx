@@ -29,6 +29,7 @@ import {
   registerLogsInsights,
 } from '../../language/logsInsights';
 import { SavedQuery } from '../../types';
+import { queryStageLine } from '../../utils/table';
 
 const SAVE_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘S' : 'Ctrl+S';
 
@@ -107,13 +108,9 @@ export function QueryEditor({
         line.appendChild(hint);
         dom.appendChild(line);
       }
-      // After the last line with text: queries often end in blank lines, which would push the
-      // suggestions out of view.
-      const model = ed.getModel();
-      let after = model?.getLineCount() ?? 1;
-      while (after > 1 && model?.getLineContent(after).trim() === '') {
-        after--;
-      }
+      // Where a click will insert the clause (before sort/limit/..., else after the last line with
+      // text), so adding it does not move the rest of the query around.
+      const after = queryStageLine(ed.getValue());
       const id = zones.addZone({
         afterLineNumber: after,
         heightInLines: lines.length,

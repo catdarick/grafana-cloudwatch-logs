@@ -121,8 +121,10 @@ export function queryFilter(path: string, value: unknown, negate: boolean): stri
  * Adds a clause before the first sort/limit/stats/dedup/display stage, so it narrows the logs
  * rather than the already limited or aggregated output.
  */
+const LATE_STAGE = /\|\s*(sort|limit|stats|dedup|display)\b/;
+
 export function addQueryStage(query: string, clause: string): string {
-  const match = /\|\s*(sort|limit|stats|dedup|display)\b/.exec(query);
+  const match = LATE_STAGE.exec(query);
   if (!match) {
     return `${query.trimEnd()}\n| ${clause}`;
   }
@@ -295,6 +297,27 @@ export function flattenMessage(message: string | undefined): Record<string, stri
   } catch {
     return {};
   }
+}
+
+/**
+ * Line after which addQueryStage puts a clause, for showing it in place before it is added: the
+ * line before a sort/limit/... stage that starts its own line, the line holding one mid-line, or
+ * the last line with text. 0 means before the first line.
+ */
+export function queryStageLine(query: string): number {
+  const match = LATE_STAGE.exec(query);
+  const lines = query.split('\n');
+  if (!match) {
+    let last = lines.length;
+    while (last > 1 && lines[last - 1].trim() === '') {
+      last--;
+    }
+    return last;
+  }
+  const before = query.slice(0, match.index);
+  const line = before.split('\n').length;
+  const startsLine = before.slice(before.lastIndexOf('\n') + 1).trim() === '';
+  return startsLine ? line - 1 : line;
 }
 
 const NUMBER = /^-?\d+(\.\d+)?$/;
