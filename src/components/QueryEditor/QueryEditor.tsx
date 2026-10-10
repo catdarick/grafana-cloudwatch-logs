@@ -96,15 +96,26 @@ export function QueryEditor({
         line.style.height = `${lineHeight}px`;
         line.style.lineHeight = `${lineHeight}px`;
         line.title = 'Click to add this table filter to the query';
-        line.textContent = `| ${clause}`;
+        // Only the text itself is clickable, not the empty rest of the line.
+        const text = document.createElement('span');
+        text.dataset.text = '';
+        text.textContent = `| ${clause}`;
+        line.appendChild(text);
         const hint = document.createElement('span');
         hint.className = s.ghostHint;
         hint.textContent = '+ add to query';
         line.appendChild(hint);
         dom.appendChild(line);
       }
+      // After the last line with text: queries often end in blank lines, which would push the
+      // suggestions out of view.
+      const model = ed.getModel();
+      let after = model?.getLineCount() ?? 1;
+      while (after > 1 && model?.getLineContent(after).trim() === '') {
+        after--;
+      }
       const id = zones.addZone({
-        afterLineNumber: ed.getModel()?.getLineCount() ?? 1,
+        afterLineNumber: after,
         heightInLines: lines.length,
         domNode: dom,
       });
@@ -304,10 +315,10 @@ export function QueryEditor({
             ) {
               return undefined;
             }
-            const y = e.event.browserEvent.clientY;
+            const { clientX: x, clientY: y } = e.event.browserEvent;
             return Array.from(zone.dom.children).find((line) => {
-              const rect = line.getBoundingClientRect();
-              return y >= rect.top && y < rect.bottom;
+              const rect = line.querySelector('[data-text]')?.getBoundingClientRect();
+              return rect && y >= rect.top && y < rect.bottom && x >= rect.left && x <= rect.right;
             }) as HTMLElement | undefined;
           };
           editor.onMouseDown((e) => {
