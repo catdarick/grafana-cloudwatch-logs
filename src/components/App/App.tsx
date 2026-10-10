@@ -4,6 +4,7 @@ import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
+import { formatProblem, lintQuery } from '../../language/lint';
 import { knownRawFields, useRawFieldHistory } from '../../state/rawFieldHistory';
 import { useTableViews } from '../../state/tableViews';
 import { useWorkspace } from '../../state/useWorkspace';
@@ -21,6 +22,9 @@ import { ResultsTable } from '../Results/ResultsTable';
 import { QueryTabs } from '../Tabs/QueryTabs';
 import { TimeRangePicker } from '../TimeRangePicker/TimeRangePicker';
 import { testIds } from '../testIds';
+
+/** What Grafana 10.4 answers with instead of the data source's own error. */
+const GENERIC_PLUGIN_ERROR = 'An error occurred within the plugin';
 
 function defaultDatasourceUid(settings: AppSettings): string | undefined {
   return settings.datasourceUid || getDataSourceSrv().getList({ type: 'cloudwatch' })[0]?.uid;
@@ -142,6 +146,10 @@ function App({ meta }: AppRootProps<AppSettings>) {
   };
 
   const error = runError[tab.id] ?? result?.error;
+  // Grafana 10.4 replaces CloudWatch's error text (a syntax error, say) with a generic one; say what
+  // our own check finds in the query instead.
+  const genericError = error === GENERIC_PLUGIN_ERROR;
+  const problems = useMemo(() => (genericError ? lintQuery(tab.query) : []), [genericError, tab.query]);
   const failed = Object.fromEntries(ws.state.tabs.map((t) => [t.id, Boolean(runError[t.id] ?? results[t.id]?.error)]));
 
   const zoomTo = (from: number, to: number) => {
@@ -258,7 +266,23 @@ function App({ meta }: AppRootProps<AppSettings>) {
 
         {error && (
           <Alert severity="error" title="Query failed">
-            {error}
+            {!genericError ? (
+              error
+            ) : problems.length > 0 ? (
+              <>
+                <div>Grafana does not pass on CloudWatch&apos;s error message. The query has these problems:</div>
+                <ul className={s.problems}>
+                  {problems.map((p) => (
+                    <li key={formatProblem(p)}>{formatProblem(p)}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <>
+                {error}. Grafana does not pass on CloudWatch&apos;s error message, and no syntax problem was found in
+                the query. The exact message is in the Grafana server log.
+              </>
+            )}
           </Alert>
         )}
 
@@ -405,6 +429,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   // Pinned to the bottom of the column so it does not move when the picker above changes height.
   runButton: css({ flex: '0 0 auto', height: theme.spacing(6), marginTop: 'auto' }),
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
+  problems: css({ margin: theme.spacing(0.5, 0, 0, 2), fontFamily: theme.typography.fontFamilyMonospace }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
   meta: css({
     display: 'flex',

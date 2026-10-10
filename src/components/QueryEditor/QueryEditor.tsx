@@ -28,9 +28,11 @@ import {
   SYSTEM_FIELDS,
   registerLogsInsights,
 } from '../../language/logsInsights';
+import { lintQuery } from '../../language/lint';
 import { SavedQuery } from '../../types';
 import { queryStageLine } from '../../utils/table';
 
+const LINT_OWNER = 'logs-insights-lint';
 const SAVE_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘S' : 'Ctrl+S';
 
 interface Props {
@@ -119,6 +121,23 @@ export function QueryEditor({
       zoneRef.current = { id, dom };
     });
   }, [editor, pendingKey, query, s]);
+  // Likely syntax errors, underlined as you type: Grafana 10.4 does not pass CloudWatch's own on.
+  useEffect(() => {
+    const model = editor?.editor.getModel();
+    if (!editor || !model) {
+      return;
+    }
+    const markers = lintQuery(query).map((p) => ({
+      severity: editor.monaco.MarkerSeverity.Error,
+      message: p.message,
+      startLineNumber: p.line,
+      startColumn: p.column,
+      endLineNumber: p.line,
+      endColumn: p.endColumn,
+    }));
+    editor.monaco.editor.setModelMarkers(model, LINT_OWNER, markers);
+  }, [editor, query]);
+
   // Which dialog is open: save under a new name, or rename the current saved query.
   const [dialog, setDialog] = useState<'saveAs' | 'rename'>();
   const [name, setName] = useState('');
