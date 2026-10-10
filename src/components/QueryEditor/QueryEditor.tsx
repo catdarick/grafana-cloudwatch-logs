@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { AppEvents, GrafanaTheme2 } from '@grafana/data';
 import { getAppEvents } from '@grafana/runtime';
@@ -15,6 +15,8 @@ import {
   Input,
   Menu,
   Modal,
+  Monaco,
+  MonacoEditor,
   Toggletip,
   useStyles2,
 } from '@grafana/ui';
@@ -40,6 +42,10 @@ interface Props {
   onRun: () => void;
   onSave: (query: SavedQuery) => void;
   onDelete: (name: string) => void;
+  /** Table filters not yet in the query, as clauses; shown as faint lines after the query. */
+  pendingFilters: string[];
+  /** Puts a clause into the query text (without running it). */
+  onApplyFilter: (clause: string) => void;
   /** Relative ranges get a second option that pins the time, so the link shows the same logs later. */
   relativeTime: boolean;
   onCopyLink: (fixedTime: boolean) => void;
@@ -56,8 +62,55 @@ export function QueryEditor({
   onDelete,
   relativeTime,
   onCopyLink,
+  pendingFilters,
+  onApplyFilter,
 }: Props) {
   const s = useStyles2(getStyles);
+  const [editor, setEditor] = useState<{ editor: MonacoEditor; monaco: Monaco }>();
+  const applyRef = useRef(onApplyFilter);
+  const zoneRef = useRef<{ id: string; dom: HTMLElement }>();
+  const pendingKey = pendingFilters.join('\n');
+
+  // Pending table filters as a view zone after the last line: looks like text, is not part of it.
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+    const { editor: ed, monaco } = editor;
+    const lines = pendingKey ? pendingKey.split('\n') : [];
+    const lineHeight = ed.getOption(monaco.editor.EditorOption.lineHeight);
+    ed.changeViewZones((zones) => {
+      if (zoneRef.current) {
+        zones.removeZone(zoneRef.current.id);
+        zoneRef.current = undefined;
+      }
+      if (lines.length === 0) {
+        return;
+      }
+      const dom = document.createElement('div');
+      dom.className = s.ghostZone;
+      for (const clause of lines) {
+        const line = document.createElement('div');
+        line.className = s.ghostLine;
+        line.dataset.clause = clause;
+        line.style.height = `${lineHeight}px`;
+        line.style.lineHeight = `${lineHeight}px`;
+        line.title = 'Click to add this table filter to the query';
+        line.textContent = `| ${clause}`;
+        const hint = document.createElement('span');
+        hint.className = s.ghostHint;
+        hint.textContent = '+ add to query';
+        line.appendChild(hint);
+        dom.appendChild(line);
+      }
+      const id = zones.addZone({
+        afterLineNumber: ed.getModel()?.getLineCount() ?? 1,
+        heightInLines: lines.length,
+        domNode: dom,
+      });
+      zoneRef.current = { id, dom };
+    });
+  }, [editor, pendingKey, query, s]);
   // Which dialog is open: save under a new name, or rename the current saved query.
   const [dialog, setDialog] = useState<'saveAs' | 'rename'>();
   const [name, setName] = useState('');
@@ -91,6 +144,7 @@ export function QueryEditor({
     onChangeRef.current = (value: string) => onChange(value, savedQueryName);
     runRef.current = onRun;
     saveRef.current = save;
+    applyRef.current = onApplyFilter;
     fieldsRef.current = fields;
   });
 
@@ -238,6 +292,45 @@ export function QueryEditor({
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
           editor.onDidChangeModelContent(() => onChangeRef.current(editor.getValue()));
+          // The text layer sits above view zones and takes the mouse, so find the pending filter line
+          // under the pointer from Monaco's hit test and the zone's position.
+          const lineAt = (e: { target: { type: number; detail?: unknown }; event: { browserEvent: MouseEvent } }) => {
+            const zone = zoneRef.current;
+            const detail = e.target.detail as { viewZoneId?: string } | undefined;
+            if (
+              !zone ||
+              e.target.type !== monaco.editor.MouseTargetType.CONTENT_VIEW_ZONE ||
+              detail?.viewZoneId !== zone.id
+            ) {
+              return undefined;
+            }
+            const y = e.event.browserEvent.clientY;
+            return Array.from(zone.dom.children).find((line) => {
+              const rect = line.getBoundingClientRect();
+              return y >= rect.top && y < rect.bottom;
+            }) as HTMLElement | undefined;
+          };
+          editor.onMouseDown((e) => {
+            const clause = lineAt(e)?.dataset.clause;
+            if (clause) {
+              e.event.preventDefault();
+              applyRef.current(clause);
+            }
+          });
+          editor.onMouseMove((e) => {
+            const hovered = lineAt(e);
+            zoneRef.current?.dom.querySelectorAll('[data-clause]').forEach((line) => {
+              line.toggleAttribute('data-hover', line === hovered);
+            });
+            const textLayer = editor.getDomNode()?.querySelector<HTMLElement>('.view-lines');
+            if (textLayer) {
+              textLayer.style.cursor = hovered ? 'pointer' : '';
+            }
+          });
+          editor.onMouseLeave(() => {
+            zoneRef.current?.dom.querySelectorAll('[data-hover]').forEach((line) => line.removeAttribute('data-hover'));
+          });
+          setEditor({ editor, monaco });
         }}
       />
       <Modal
@@ -267,6 +360,28 @@ export function QueryEditor({
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
+  ghostZone: css({ display: 'flex', flexDirection: 'column' }),
+  // Same font as the query, faded: reads as "would be here", clearly not typed text.
+  ghostLine: css({
+    display: 'flex',
+    gap: theme.spacing(2),
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: 13,
+    whiteSpace: 'pre',
+    color: theme.colors.text.primary,
+    opacity: 0.4,
+    cursor: 'pointer',
+    // Hover is set from Monaco's mouse events: the text layer above keeps :hover from firing.
+    '&[data-hover]': { opacity: 0.85, textDecoration: 'underline dotted' },
+    '&[data-hover] > span': { visibility: 'visible' },
+  }),
+  ghostHint: css({
+    visibility: 'hidden',
+    color: theme.colors.primary.text,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.bodySmall.fontSize,
+    textDecoration: 'none',
+  }),
   // Monaco has no border of its own; the frame makes the editor and its bar read as one text field.
   // It fills the row, which is at least as tall as the time range panel next to it.
   frame: css({

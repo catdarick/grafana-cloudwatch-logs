@@ -33,6 +33,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const [results, setResults] = useState<Record<string, QueryResult | undefined>>({});
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [runError, setRunError] = useState<Record<string, string | undefined>>({});
+  // Table filters of the active tab's results as query clauses, offered as ghost lines in the editor.
+  const [tableClauses, setTableClauses] = useState<string[]>([]);
   // Hides log groups and the editor so the results get the whole page.
   const [focusResults, setFocusResults] = useState(false);
   const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
@@ -201,6 +203,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 onRun={() => run()}
                 onSave={ws.saveQuery}
                 onDelete={ws.deleteQuery}
+                pendingFilters={tableClauses.filter((c) => !tab.query.includes(c))}
+                onApplyFilter={(clause) => ws.updateTab(tab.id, { query: addQueryStage(tab.query, clause) })}
                 relativeTime={tab.timeRange.mode === 'relative'}
                 onCopyLink={copyLink}
               />
@@ -295,6 +299,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
               onRunRange={zoomTo}
               onAddQueryFilter={addQueryFilter}
               exportName={tab.title}
+              onFilterClauses={setTableClauses}
             />
           </section>
         )}

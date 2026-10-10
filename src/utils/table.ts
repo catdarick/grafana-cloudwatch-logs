@@ -296,3 +296,52 @@ export function flattenMessage(message: string | undefined): Record<string, stri
     return {};
   }
 }
+
+const NUMBER = /^-?\d+(\.\d+)?$/;
+
+function literal(value: string, numeric: boolean): string {
+  return numeric && NUMBER.test(value) ? value : JSON.stringify(value);
+}
+
+function fieldRef(path: string): string {
+  return PLAIN_FIELD.test(path) ? path : `\`${path.replace(/`/g, '``')}\``;
+}
+
+/**
+ * One Logs Insights `filter` clause per table filter: the allowed values as `=` or `in`, or the
+ * excluded ones as `!=` / `not in` when that list is shorter. Empty values map to isempty().
+ */
+export function valueFilterClause(field: string, allowed: Set<string>, allValues: string[], numeric: boolean): string {
+  const ref = fieldRef(field);
+  const distinct = Array.from(new Set(allValues));
+  const excluded = distinct.filter((v) => !allowed.has(v));
+  const exclude = excluded.length < allowed.size;
+  const values = exclude ? excluded : Array.from(allowed);
+  const empty = values.includes('');
+  const rest = values.filter((v) => v !== '').map((v) => literal(v, numeric));
+  const parts: string[] = [];
+  if (rest.length === 1) {
+    parts.push(`${ref} ${exclude ? '!=' : '='} ${rest[0]}`);
+  } else if (rest.length > 1) {
+    parts.push(`${ref} ${exclude ? 'not in' : 'in'} [${rest.join(', ')}]`);
+  }
+  if (empty) {
+    parts.push(exclude ? `ispresent(${ref})` : `isempty(${ref})`);
+  }
+  if (parts.length === 0) {
+    // Nothing allowed at all.
+    return `filter ${exclude ? `ispresent(${ref}) or isempty(${ref})` : `isempty(${ref}) and ispresent(${ref})`}`;
+  }
+  const condition = parts.join(exclude ? ' and ' : ' or ');
+  // A comparison is false for logs without the field, so keep them explicitly when they are allowed.
+  if (exclude && !empty && distinct.includes('')) {
+    return `filter ${parts.length > 1 ? `(${condition})` : condition} or isempty(${ref})`;
+  }
+  return `filter ${condition}`;
+}
+
+/** Search text as a case-insensitive regex filter over the searched columns. */
+export function searchClause(text: string, fields: string[]): string {
+  const pattern = `/(?i)${text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/`;
+  return `filter ${fields.map((f) => `${fieldRef(f)} like ${pattern}`).join(' or ')}`;
+}

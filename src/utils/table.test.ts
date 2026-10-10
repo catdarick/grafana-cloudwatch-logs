@@ -11,8 +11,10 @@ import {
   orderColumns,
   parseSort,
   queryFilter,
+  searchClause,
   sortOrder,
   unloadedRange,
+  valueFilterClause,
   splitMatches,
   valueCounts,
   visibleColumns,
@@ -167,5 +169,39 @@ describe('flattenJson', () => {
     expect(flattenMessage('{"level":"info"}')).toEqual({ level: 'info' });
     expect(flattenMessage('plain text')).toEqual({});
     expect(flattenMessage('{broken')).toEqual({});
+  });
+});
+
+describe('filter clauses', () => {
+  const all = ['Info', 'Debug', 'Warning', 'Error', ''];
+  it('uses = and in for a few allowed values', () => {
+    expect(valueFilterClause('severity', new Set(['Error']), all, false)).toBe('filter severity = "Error"');
+    expect(valueFilterClause('severity', new Set(['Error', 'Warning']), all, false)).toBe(
+      'filter severity in ["Error", "Warning"]'
+    );
+  });
+
+  it('uses != and not in when fewer values are excluded', () => {
+    expect(valueFilterClause('severity', new Set(['Info', 'Warning', 'Error', '']), all, false)).toBe(
+      'filter severity != "Debug" or isempty(severity)'
+    );
+    expect(
+      valueFilterClause('severity', new Set(['Info', 'Warning', 'Error']), ['Info', 'Debug', 'Warning', 'Error'], false)
+    ).toBe('filter severity != "Debug"');
+    expect(valueFilterClause('severity', new Set(['Info', 'Debug', 'Warning']), all, false)).toBe(
+      'filter severity != "Error" and ispresent(severity)'
+    );
+  });
+
+  it('writes numbers without quotes and quotes odd field names', () => {
+    expect(valueFilterClause('status code', new Set(['500']), ['200', '500', '404'], true)).toBe(
+      'filter `status code` = 500'
+    );
+  });
+
+  it('turns search into a case-insensitive regex', () => {
+    expect(searchClause('a.b/c', ['message', 'pod'])).toBe(
+      'filter message like /(?i)a\\.b\\/c/ or pod like /(?i)a\\.b\\/c/'
+    );
   });
 });

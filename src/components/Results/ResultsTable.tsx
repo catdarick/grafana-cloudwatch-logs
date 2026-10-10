@@ -21,9 +21,11 @@ import {
   passesFilters,
   queryFilter,
   rowMatches,
+  searchClause,
   splitMatches,
   unloadedRange,
   valueCounts,
+  valueFilterClause,
   visibleColumns,
 } from '../../utils/table';
 import { ColumnMenu } from './ColumnMenu';
@@ -43,6 +45,8 @@ interface Props {
   onAddQueryFilter: (clause: string) => void;
   /** Used in exported file names, e.g. the tab title. */
   exportName: string;
+  /** The table's filters and search as Logs Insights clauses, for the editor to offer. */
+  onFilterClauses: (clauses: string[]) => void;
 }
 
 const EXPAND_WIDTH = 32;
@@ -81,6 +85,7 @@ export function ResultsTable({
   onRunRange,
   onAddQueryFilter,
   exportName,
+  onFilterClauses,
 }: Props) {
   const s = useStyles2(getStyles);
   const [filters, setFilters] = useState<ValueFilters>({});
@@ -290,6 +295,30 @@ export function ResultsTable({
       return next;
     });
   };
+
+  // Filters and search, written as query clauses. Time columns are left out: their cells hold
+  // formatted dates that a query cannot compare against.
+  const clauses = useMemo(() => {
+    const out = Object.entries(filters)
+      .filter(([field]) => !result.timeFields.includes(field))
+      .map(([field, allowed]) => {
+        const values = displayRows.map((r) => r[field] ?? '');
+        const numeric = values.every((v) => v === '' || /^-?\d+(\.\d+)?$/.test(v));
+        return valueFilterClause(field, allowed, values, numeric);
+      });
+    const searched = cols.filter((f) => !result.timeFields.includes(f));
+    if (needle && hideNonMatching && searched.length > 0) {
+      out.push(searchClause(search.trim(), searched));
+    }
+    return out;
+  }, [filters, displayRows, result.timeFields, cols, needle, hideNonMatching, search]);
+  const clausesKey = clauses.join('\n');
+  useEffect(() => {
+    onFilterClauses(clausesKey ? clausesKey.split('\n') : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clausesKey]);
+  // A new result (or closing the tab's results) starts without table filters.
+  useEffect(() => () => onFilterClauses([]), [onFilterClauses]);
 
   const filterValue = (field: string, value: string, exclude: boolean) => {
     if (!exclude) {

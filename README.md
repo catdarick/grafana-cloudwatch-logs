@@ -25,6 +25,9 @@ Requires **Grafana 10.4** or later.
 - Fields of the raw JSON log (`@message`, nested ones as `kubernetes.pod_name`) can be added as columns via Columns →
   "Add from raw log", without a new query. In the expanded log, 🔍+/🔍− filter the table (the field becomes a column),
   and "⋯" adds a `filter` to the query and re-runs it.
+- Active table filters (column value filters and search with "Hide non-matching") appear in the editor as faint
+  `| filter …` lines in Logs Insights syntax. Clicking one inserts the filter into the query (before sort/limit) without running it.
+  They are Monaco view zones, not part of the query text.
 - "Export CSV" above the table opens one dialog: which rows (shown or all loaded; only asked when filters,
   search or zoom hide some), which columns (the visible ones by default) and which parts of the raw log (`@message`,
   `@log`, `@logStream`). Times in the selected zone, UTF-8 with a BOM.
