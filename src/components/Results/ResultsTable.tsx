@@ -78,6 +78,14 @@ interface RowActions {
  */
 const resultCache = new WeakMap<QueryResult, Map<string, { key: string; value: unknown }>>();
 
+/** Whether the element can scroll horizontally any further in the direction of deltaX. */
+function canScrollX(el: HTMLElement, deltaX: number): boolean {
+  if (el.scrollWidth <= el.clientWidth || !/auto|scroll/.test(getComputedStyle(el).overflowX)) {
+    return false;
+  }
+  return deltaX < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+
 function cachedFor<T>(result: QueryResult, name: string, key: string, compute: () => T): T {
   let cache = resultCache.get(result);
   if (!cache) {
@@ -159,6 +167,30 @@ export function ResultsTable({
     const observer = new ResizeObserver(() => setViewWidth(el.clientWidth));
     observer.observe(el);
     return () => observer.disconnect();
+  }, [scrollElement]);
+
+  // A sideways swipe the table cannot scroll any further would go to the browser as back/forward.
+  useEffect(() => {
+    const el = scrollElement;
+    if (!el) {
+      return;
+    }
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) {
+        return;
+      }
+      for (let node = e.target as HTMLElement | null; node; node = node.parentElement) {
+        if (canScrollX(node, e.deltaX)) {
+          return;
+        }
+        if (node === el) {
+          break;
+        }
+      }
+      e.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
   }, [scrollElement]);
 
   // Time fields arrive as epoch millis; show them in the selected zone.
@@ -1079,6 +1111,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   // Own scroll area: keeps the header visible and lets only the rows on screen render.
   scroll: css({
     overflow: 'auto',
+    overscrollBehaviorX: 'none',
     maxHeight: 'max(360px, calc(100vh - 220px))',
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
