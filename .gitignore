@@ -47,3 +47,6 @@ ci/
 
 .eslintcache
 .env
+
+# Packaged plugin zips
+release/
