@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { Virtualizer, useVirtualizer } from '@tanstack/react-virtual';
 import { GrafanaTheme2 } from '@grafana/data';
@@ -69,7 +69,6 @@ interface RowActions {
   filterValue: (field: string, value: string, exclude: boolean) => void;
   filterByLogValue: (path: string, value: unknown, exclude: boolean) => void;
   addQueryFilter: (path: string, value: unknown, negate: boolean) => void;
-  canFilterTable: (path: string) => boolean;
 }
 
 /**
@@ -433,9 +432,13 @@ export function ResultsTable({
       filterValue,
       filterByLogValue,
       addQueryFilter: (path, value, negate) => onAddQueryFilter(queryFilter(path, value, negate)),
-      canFilterTable: (path) => fields.includes(path) || rawKeys.some((k) => k.name === path),
     };
   });
+  // Read while rendering open rows, so a prop rather than one of the actions set after rendering.
+  const canFilterTable = useCallback(
+    (path: string) => fields.includes(path) || rawKeys.some((k) => k.name === path),
+    [fields, rawKeys]
+  );
 
   // Widths: what the user dragged, else an estimate from content. The widest unsized column
   // takes the remaining space so the table always fills the panel.
@@ -693,6 +696,7 @@ export function ResultsTable({
             unclamped={unclamped}
             viewWidth={viewWidth}
             actions={rowActions}
+            canFilterTable={canFilterTable}
             emptyText={total === 0 ? 'No rows' : 'No rows match the current filters'}
           />
         </table>
@@ -725,6 +729,7 @@ interface TableRowsProps {
   unclamped: Set<number>;
   viewWidth: number;
   actions: React.RefObject<RowActions | null>;
+  canFilterTable: (path: string) => boolean;
   emptyText: string;
 }
 
@@ -753,6 +758,7 @@ const TableRows = React.memo(function TableRows({
   unclamped,
   viewWidth,
   actions,
+  canFilterTable,
   emptyText,
 }: TableRowsProps) {
   // No React Compiler here anyway; the virtualizer is re-read on every render by design.
@@ -765,6 +771,9 @@ const TableRows = React.memo(function TableRows({
     getItemKey: (i) => rows[i],
     initialOffset,
     initialMeasurementsCache: initialMeasurements,
+    // Rows on the very first render, before the scroll area is measured. Without them the page
+    // gets shorter for a moment when a tab is shown, and the browser scrolls it up.
+    initialRect: { width: 0, height: window.innerHeight },
   });
   virtualizerRef.current = virtualizer;
 
@@ -815,6 +824,7 @@ const TableRows = React.memo(function TableRows({
             isUnclamped={unclamped.has(index)}
             detailsWidth={isOpen ? viewWidth - EXPAND_WIDTH - 24 : 0}
             actions={actions}
+            canFilterTable={canFilterTable}
           />
         );
       })}
@@ -856,6 +866,7 @@ interface LogRowProps {
   isUnclamped: boolean;
   detailsWidth: number;
   actions: React.RefObject<RowActions | null>;
+  canFilterTable: (path: string) => boolean;
 }
 
 const LogRow = React.memo(function LogRow({
@@ -875,6 +886,7 @@ const LogRow = React.memo(function LogRow({
   isUnclamped,
   detailsWidth,
   actions,
+  canFilterTable,
 }: LogRowProps) {
   // Cell actions are buttons with tooltips, costly to mount for every cell scrolled past, so they
   // are only rendered for the row under the mouse.
@@ -973,7 +985,7 @@ const LogRow = React.memo(function LogRow({
               log={fullLog(row, details)}
               logGroup={details?.logGroup}
               logStream={details?.logStream}
-              canFilterTable={(path) => act().canFilterTable(path)}
+              canFilterTable={canFilterTable}
               onTableFilter={(path, value, exclude) => act().filterByLogValue(path, value, exclude)}
               onQueryFilter={(path, value, negate) => act().addQueryFilter(path, value, negate)}
             />
@@ -1094,6 +1106,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
       whiteSpace: 'nowrap',
       paddingRight: theme.spacing(1.5),
     },
+    // The column menu renders inside the header cell (no portal in this @grafana/ui),
+    // so lift the cell above the sticky toolbar while its menu is open.
+    'th:has([aria-expanded="true"])': { zIndex: 4 },
   }),
   header: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
   headerName: css({ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }),
