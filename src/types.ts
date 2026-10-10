@@ -1,3 +1,5 @@
+import type { VirtualItem } from '@tanstack/react-virtual';
+
 export type TimeUnit = 'minutes' | 'hours' | 'days';
 
 export type TimeRangeValue =
@@ -48,6 +50,29 @@ export interface ColumnSettings {
   order?: string[];
   hidden?: string[];
   widths?: Record<string, number>;
+}
+
+/**
+ * How a tab's results table was left: filters, search, zoom, open rows and scroll. Kept in memory
+ * (like results) so switching tabs and back shows the table as it was.
+ */
+export interface TableView {
+  /** Allowed values per field. */
+  filters: Record<string, Set<string>>;
+  /** Time window picked on the histogram. */
+  zoom?: { from: number; to: number };
+  search: string;
+  hideNonMatching: boolean;
+  /** Index of the current search match. */
+  current: number;
+  /** Row indexes with details open. */
+  expanded: Set<number>;
+  /** Row indexes whose long cells are shown in full. */
+  unclamped: Set<number>;
+  scrollTop: number;
+  scrollLeft: number;
+  /** Measured row heights, so the scroll position lands on the same rows. */
+  measurements?: VirtualItem[];
 }
 
 export interface QueryTab {

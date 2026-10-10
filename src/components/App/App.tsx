@@ -4,6 +4,7 @@ import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
+import { useTableViews } from '../../state/tableViews';
 import { useWorkspace } from '../../state/useWorkspace';
 import { DEFAULT_REGION, PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
@@ -39,6 +40,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   // Hides log groups and the editor so the results get the whole page.
   const [focusResults, setFocusResults] = useState(false);
   const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
+  // Search, filters, zoom and scroll of each tab's table, so switching tabs does not lose them.
+  const tableViews = useTableViews();
 
   // A shared link opens its query in a tab once; the params are then dropped so a reload keeps the workspace.
   useEffect(() => {
@@ -156,6 +159,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
             onSelect={ws.selectTab}
             onClose={(id) => {
               cancelQuery(requestId(id));
+              tableViews.forget(id);
               ws.closeTab(id);
             }}
             onAdd={() => ws.addTab(tab)}
@@ -288,7 +292,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
               </Button>
             </div>
             <ResultsTable
-              key={result.ranAt}
+              key={`${tab.id}:${result.ranAt}`}
               result={result}
               timeZone={ws.state.timeZone}
               columns={tab.columns ?? {}}
@@ -297,6 +301,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
               onAddQueryFilter={addQueryFilter}
               exportName={tab.title}
               onFilterClauses={setTableClauses}
+              initialView={tableViews.get(tab.id, result.ranAt)}
+              onSaveView={(view) => tableViews.save(tab.id, result.ranAt, view)}
             />
           </section>
         )}

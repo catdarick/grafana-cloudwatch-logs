@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { GrafanaTheme2 } from '@grafana/data';
 import type { TimeZone } from '@grafana/schema';
 import { Button, Checkbox, ClipboardButton, Icon, IconButton, Input, useStyles2 } from '@grafana/ui';
-import { ColumnSettings, QueryResult } from '../../types';
+import { ColumnSettings, QueryResult, TableView } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
 import { downloadCsv, toCsv } from '../../utils/csv';
 import { formatTime } from '../../utils/timeRange';
@@ -47,6 +47,10 @@ interface Props {
   exportName: string;
   /** The table's filters and search as Logs Insights clauses, for the editor to offer. */
   onFilterClauses: (clauses: string[]) => void;
+  /** How the table was left last time, for the same result. */
+  initialView?: TableView;
+  /** Called when the table goes away (e.g. another tab is selected) with how it was left. */
+  onSaveView?: (view: TableView) => void;
 }
 
 const EXPAND_WIDTH = 32;
@@ -86,21 +90,25 @@ export function ResultsTable({
   onAddQueryFilter,
   exportName,
   onFilterClauses,
+  initialView,
+  onSaveView,
 }: Props) {
   const s = useStyles2(getStyles);
-  const [filters, setFilters] = useState<ValueFilters>({});
+  const [filters, setFilters] = useState<ValueFilters>(() => initialView?.filters ?? {});
   // Time window picked on the histogram; narrows the loaded rows without a new query.
-  const [zoom, setZoom] = useState<{ from: number; to: number }>();
+  const [zoom, setZoom] = useState<{ from: number; to: number } | undefined>(() => initialView?.zoom);
   const [exporting, setExporting] = useState(false);
-  const [search, setSearch] = useState('');
-  const [hideNonMatching, setHideNonMatching] = useState(false);
-  const [current, setCurrent] = useState(0);
+  const [search, setSearch] = useState(() => initialView?.search ?? '');
+  const [hideNonMatching, setHideNonMatching] = useState(() => initialView?.hideNonMatching ?? false);
+  const [current, setCurrent] = useState(() => initialView?.current ?? 0);
   const [scrollRequest, setScrollRequest] = useState(0);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState<Set<number>>(() => initialView?.expanded ?? new Set());
   // Rows whose long cells are shown in full instead of clamped to two lines.
-  const [unclamped, setUnclamped] = useState<Set<number>>(new Set());
+  const [unclamped, setUnclamped] = useState<Set<number>>(() => initialView?.unclamped ?? new Set());
   const [draftWidths, setDraftWidths] = useState<Record<string, number>>();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Kept out of state: scrolling should not re-render the table.
+  const scrollPosition = useRef({ top: initialView?.scrollTop ?? 0, left: initialView?.scrollLeft ?? 0 });
   const [viewWidth, setViewWidth] = useState(0);
 
   // Expanded details are pinned to the visible part of a wide table, so they need its width.
@@ -261,9 +269,33 @@ export function ResultsTable({
     estimateSize: () => 34,
     overscan: 12,
     getItemKey: (i) => rows[i],
+    initialOffset: () => scrollPosition.current.top,
+    initialMeasurementsCache: initialView?.measurements,
   });
 
+  // Hand back how the table was left, read from refs so it is the latest when the table goes away.
+  const latestView = useRef<(() => TableView) | null>(null);
+  latestView.current = () => ({
+    filters,
+    zoom,
+    search,
+    hideNonMatching,
+    current,
+    expanded,
+    unclamped,
+    scrollTop: scrollPosition.current.top,
+    scrollLeft: scrollPosition.current.left,
+    measurements: virtualizer.takeSnapshot(),
+  });
+  const saveView = useRef(onSaveView);
+  saveView.current = onSaveView;
+  useEffect(() => () => saveView.current?.(latestView.current!()), []);
+
   useEffect(() => {
+    // Nothing asked yet: a restored search keeps the restored scroll position.
+    if (scrollRequest === 0) {
+      return;
+    }
     if (currentRow !== undefined) {
       const position = rows.indexOf(currentRow);
       if (position >= 0) {
@@ -438,6 +470,19 @@ export function ResultsTable({
   const padTop = items.length ? items[0].start : 0;
   const padBottom = items.length ? virtualizer.getTotalSize() - items[items.length - 1].end : 0;
 
+  // Back to where the table was scrolled when it was last shown. The first render has no rows yet
+  // (the virtualizer has not measured the scroll area), so wait until they are on the page.
+  const scrollRestored = useRef(false);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (scrollRestored.current || !el || (rows.length > 0 && items.length === 0)) {
+      return;
+    }
+    scrollRestored.current = true;
+    el.scrollTop = scrollPosition.current.top;
+    el.scrollLeft = scrollPosition.current.left;
+  });
+
   return (
     <div className={s.wrapper}>
       {zoom && (
@@ -557,7 +602,13 @@ export function ResultsTable({
         />
       </div>
 
-      <div className={s.scroll} ref={scrollRef}>
+      <div
+        className={s.scroll}
+        ref={scrollRef}
+        onScroll={(e) => {
+          scrollPosition.current = { top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft };
+        }}
+      >
         <table
           className={s.table}
           style={{ width: flexCol ? '100%' : fixedSum, minWidth: fixedSum + (flexCol ? FLEX_MIN_WIDTH : 0) }}
