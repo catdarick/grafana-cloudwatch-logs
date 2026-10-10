@@ -3,6 +3,7 @@ import { lastValueFrom } from 'rxjs';
 import { AppPluginMeta, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { DataSourcePicker, getBackendSrv } from '@grafana/runtime';
 import { Button, Field, FieldSet, Input } from '@grafana/ui';
+import { DEFAULT_REGION } from '../../constants';
 import { AppSettings } from '../../types';
 import { DEFAULT_COST_PER_GB } from '../../utils/cost';
 import { testIds } from '../testIds';
@@ -43,13 +44,13 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         </Field>
         <Field
           label="Default region"
-          description="Region for browsing log groups. Empty means the data source's default."
+          description={`Region for browsing log groups. Empty means ${DEFAULT_REGION}.`}
         >
           <Input
             width={60}
             data-testid={testIds.appConfig.region}
             value={defaultRegion}
-            placeholder="us-east-2"
+            placeholder={DEFAULT_REGION}
             onChange={(e) => setDefaultRegion(e.currentTarget.value)}
           />
         </Field>

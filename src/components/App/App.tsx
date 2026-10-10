@@ -5,7 +5,7 @@ import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService
 import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { useWorkspace } from '../../state/useWorkspace';
-import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
+import { DEFAULT_REGION, PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { AppSettings, QueryResult, TimeRangeValue } from '../../types';
 import { copyWithToast } from '../../utils/clipboard';
 import { errorMessage } from '../../utils/errors';
@@ -21,7 +21,7 @@ import { TimeRangePicker } from '../TimeRangePicker/TimeRangePicker';
 import { testIds } from '../testIds';
 
 function defaultDatasourceUid(settings: AppSettings): string | undefined {
-  return settings.datasourceUid ?? getDataSourceSrv().getList({ type: 'cloudwatch' })[0]?.uid;
+  return settings.datasourceUid || getDataSourceSrv().getList({ type: 'cloudwatch' })[0]?.uid;
 }
 
 function App({ meta }: AppRootProps<AppSettings>) {
@@ -77,11 +77,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
     return Array.from(names).sort();
   }, [tab.logGroups, discoveredFields, results]);
 
-  const dsRegion = datasourceUid
-    ? (getDataSourceSrv().getInstanceSettings(datasourceUid)?.jsonData as { defaultRegion?: string } | undefined)
-        ?.defaultRegion
-    : undefined;
-  const defaultRegion = settings.defaultRegion || dsRegion || 'us-east-1';
+  const defaultRegion = settings.defaultRegion || DEFAULT_REGION;
 
   const requestId = (id: string) => `cloudwatch-logs-app-${id}`;
   const canRun =

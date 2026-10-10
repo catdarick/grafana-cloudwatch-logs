@@ -3,6 +3,7 @@
   "type": "app",
   "name": "CloudWatch Logs",
   "id": "gauss-cloudwatchlogs-app",
+  "autoEnabled": true,
   "info": {
     "keywords": ["app", "cloudwatch", "logs insights"],
     "description": "CloudWatch Logs Insights workspace with tabs, favorite log groups and saved queries",
