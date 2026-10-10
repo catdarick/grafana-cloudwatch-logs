@@ -60,6 +60,21 @@ describe('lintQuery', () => {
     expect(problems('sort col_name sdf')).toEqual(['1:15 Expected asc, desc or a comma before "sdf"']);
   });
 
+  it('flags a keyword, operator or comma with nothing after it as an error', () => {
+    expect(problems('fields a\n| sort @timestamp desc, timestamp_internal as\n| limit 5')).toEqual([
+      '2:44 Expected a name after "as"',
+    ]);
+    expect(problems('filter a = 1 and | stats count(*) by')).toEqual([
+      '1:14 Expected a value after "and"',
+      '1:35 Expected a value after "by"',
+    ]);
+    expect(problems('filter a =')).toEqual(['1:10 Expected a value after "="']);
+    expect(problems('fields concat(a, ), b,')).toEqual([
+      '1:16 Expected a value after ","',
+      '1:22 Expected a value after ","',
+    ]);
+  });
+
   it('flags a missing comma in a field list as an error', () => {
     expect(problems('fields a b, c as d e')).toEqual([
       '1:10 Missing comma before "b"',

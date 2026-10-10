@@ -217,6 +217,11 @@ export const findCommand = (word: string) => commandsByName.get(word.toLowerCase
 export const findFunction = (word: string) => functionsByName.get(word.toLowerCase());
 export const isKeyword = (word: string) => keywords.has(word.toLowerCase());
 
+// asc and desc end a sort key and any comes before limit's number; every other keyword joins what
+// comes before it to what follows, so it cannot end an expression.
+const endingKeywords = new Set(['asc', 'desc', 'any']);
+export const needsOperand = (word: string) => isKeyword(word) && !endingKeywords.has(word.toLowerCase());
+
 // Letters, digits, underscores and dots, with @ only in front: anything else needs backticks.
 const PLAIN_FIELD = /^@?[A-Za-z_][\w.]*$/;
 

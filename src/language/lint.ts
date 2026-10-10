@@ -1,5 +1,5 @@
 import { Stage, parseQuery, splitArgs } from './parse';
-import { COMMANDS, FUNCTIONS, findFunction } from './spec';
+import { COMMANDS, FUNCTIONS, findFunction, needsOperand } from './spec';
 import { Token } from './tokenize';
 
 /**
@@ -23,6 +23,8 @@ export interface QueryProblem {
 const COMPARISONS = new Set(['=', '!=', '<', '>', '<=', '>=', '=~']);
 const FOREIGN_OPERATORS: Record<string, string> = { '==': '=', '&&': 'and', '||': 'or' };
 const PAIRS: Record<string, string> = { ')': '(', ']': '[' };
+// Operators that take a value after them; * is left out (count(*)), and so are : { } of SOURCE.
+const OPERATOR = /^(?:[=<>!~+\-/%^]+|&&|\|\|)$/;
 const MAX_LIMIT = 100000;
 const COMMAND_NAMES = COMMANDS.map((c) => c.name);
 const FUNCTION_NAMES = FUNCTIONS.map((f) => f.name);
@@ -51,6 +53,17 @@ function checkTokens(tokens: Token[]): QueryProblem[] {
       problems.push({ ...where, severity: 'error', message: `Unclosed ${what} has no closing pair${scope}` });
     } else if (t.type === 'string' && t.endLine > t.line) {
       problems.push(hint(t, `This string goes on to line ${t.endLine}. Is a closing ${t.text[0]} missing?`));
+    }
+    // Nothing after it in its stage, list or brackets: sort a as, filter a =, fields a,
+    const missing = !next || ['pipe', 'comma', 'close'].includes(next.type);
+    if (
+      missing &&
+      ((t.role === 'keyword' && needsOperand(t.text)) || (t.type === 'operator' && OPERATOR.test(t.text)))
+    ) {
+      const what = ['as', 'into'].includes(t.text.toLowerCase()) ? 'a name' : 'a value';
+      problems.push(error(t, `Expected ${what} after "${t.text}"`));
+    } else if (missing && t.type === 'comma') {
+      problems.push(error(t, 'Expected a value after ","'));
     }
     if (t.type === 'operator' && FOREIGN_OPERATORS[t.text]) {
       problems.push(warning(t, `Logs Insights uses ${FOREIGN_OPERATORS[t.text]}, not ${t.text}`));
