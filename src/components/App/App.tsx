@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
-import { Alert, Button, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
+import { Alert, Button, IconName, RadioButtonGroup, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
 import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { QueryProblem, formatProblem, lintQuery } from '../../language/lint';
 import { addQueryStage } from '../../language/parse';
@@ -18,7 +18,7 @@ import { SHARE_PARAM_KEYS, fromShareParams, toShareParams } from '../../utils/sh
 import { formatTime, isValidRange, toEpochRange, zoneLabel } from '../../utils/timeRange';
 import { LogGroups } from '../LogGroups/LogGroups';
 import { QueryEditor } from '../QueryEditor/QueryEditor';
-import { ResultsTable } from '../Results/ResultsTable';
+import { RESULTS_SCROLL, ResultsTable } from '../Results/ResultsTable';
 import { QueryTabs } from '../Tabs/QueryTabs';
 import { TimeRangePicker } from '../TimeRangePicker/TimeRangePicker';
 import { testIds } from '../testIds';
@@ -44,7 +44,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const runCount = useRef<Record<string, number>>({});
   // Table filters of the active tab's results as query clauses, offered as ghost lines in the editor.
   const [tableClauses, setTableClauses] = useState<string[]>([]);
-  // Hides log groups and the editor so the results get the whole page.
+  // With the query staying on top: hides log groups and the editor so the results get the whole page.
   const [focusResults, setFocusResults] = useState(false);
   const [discoveredFields, setDiscoveredFields] = useState<Record<string, string[]>>({});
   // Search, filters, zoom and scroll of each tab's table, so switching tabs does not lose them.
@@ -177,9 +177,25 @@ function App({ meta }: AppRootProps<AppSettings>) {
     run({ query });
   };
 
+  // Auto-expand: the page and the results table scroll as one (see scrollAsOne). Off: the table only
+  // gets the space under the query part, and scrolls on its own.
+  const autoExpand = ws.state.autoExpand ?? false;
+  // Scrolling away does what Expand results does, so the button (and what it hid) is for the other layout.
+  const hideQuery = !autoExpand && focusResults;
+  const pageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page || !autoExpand) {
+      return;
+    }
+    const onWheel = (e: WheelEvent) => scrollAsOne(e, page);
+    page.addEventListener('wheel', onWheel, { passive: false });
+    return () => page.removeEventListener('wheel', onWheel);
+  }, [autoExpand]);
+
   return (
     <PluginPage layout={PageLayoutType.Canvas}>
-      <div className={s.page} data-testid={testIds.app.container}>
+      <div ref={pageRef} className={cx(s.page, autoExpand && s.pageAuto)} data-testid={testIds.app.container}>
         <div className={s.topBar}>
           <QueryTabs
             tabs={ws.state.tabs}
@@ -212,7 +228,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
           />
         </div>
 
-        {!focusResults && (
+        {!hideQuery && (
           <>
             <LogGroups
               key={`${tab.id}:${defaultRegion}`}
@@ -302,43 +318,55 @@ function App({ meta }: AppRootProps<AppSettings>) {
         )}
 
         {result && !result.error && (
-          <section className={s.results}>
+          <section className={cx(s.results, autoExpand ? s.resultsAuto : s.resultsFill)}>
             <div className={s.meta}>
-              <span>
-                {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
-                {zoneLabel(result.from, ws.state.timeZone)}
-              </span>
-              {statsParts(result)
-                .slice(0, 2)
-                .map((part) => (
-                  <span key={part} className={s.stat}>
-                    {part}
-                  </span>
-                ))}
-              {result.stats?.bytesScanned !== undefined && (
-                <CostBadge
-                  bytes={result.stats.bytesScanned}
-                  costPerGb={settings.costPerGb ?? DEFAULT_COST_PER_GB}
-                  className={s.stat}
+              <div className={s.stats}>
+                <span className={s.range}>
+                  {formatTime(result.from, ws.state.timeZone)} → {formatTime(result.to, ws.state.timeZone)}{' '}
+                  {zoneLabel(result.from, ws.state.timeZone)}
+                </span>
+                {statsParts(result)
+                  .slice(0, 2)
+                  .map((part) => (
+                    <span key={part} className={s.stat}>
+                      {part}
+                    </span>
+                  ))}
+                {result.stats?.bytesScanned !== undefined && (
+                  <CostBadge
+                    bytes={result.stats.bytesScanned}
+                    costPerGb={settings.costPerGb ?? DEFAULT_COST_PER_GB}
+                    className={s.stat}
+                  />
+                )}
+                {statsParts(result)
+                  .slice(2)
+                  .map((part) => (
+                    <span key={part} className={s.stat}>
+                      {part}
+                    </span>
+                  ))}
+              </div>
+              <span className={s.layout}>
+                {!autoExpand && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    fill="text"
+                    icon={focusResults ? 'angle-double-down' : 'angle-double-up'}
+                    title={focusResults ? 'Show query' : 'Expand results'}
+                    onClick={() => setFocusResults(!focusResults)}
+                  >
+                    {focusResults ? 'Show query' : 'Expand results'}
+                  </Button>
+                )}
+                <RadioButtonGroup
+                  size="sm"
+                  value={autoExpand ? 'scroll' : 'pinned'}
+                  options={LAYOUT_OPTIONS}
+                  onChange={(layout) => ws.setAutoExpand(layout === 'scroll')}
                 />
-              )}
-              {statsParts(result)
-                .slice(2)
-                .map((part) => (
-                  <span key={part} className={s.stat}>
-                    {part}
-                  </span>
-                ))}
-              <Button
-                className={s.focusToggle}
-                size="sm"
-                variant="secondary"
-                fill="text"
-                icon={focusResults ? 'angle-double-down' : 'angle-double-up'}
-                onClick={() => setFocusResults(!focusResults)}
-              >
-                {focusResults ? 'Show query' : 'Expand results'}
-              </Button>
+              </span>
             </div>
             <ResultsTable
               key={`${tab.id}:${result.ranAt}`}
@@ -440,8 +468,83 @@ function isCancelled(e: unknown): boolean {
   return Boolean(e && typeof e === 'object' && 'cancelled' in e && (e as { cancelled?: boolean }).cancelled);
 }
 
+/** Whether the element can scroll vertically any further in the direction of deltaY. */
+function canScrollY(el: HTMLElement, deltaY: number): boolean {
+  if (el.scrollHeight <= el.clientHeight || !/auto|scroll/.test(getComputedStyle(el).overflowY)) {
+    return false;
+  }
+  return deltaY < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+}
+
+/**
+ * The query part, then the table's rows, read as one long page: scrolling down moves the query part
+ * out of view first and then the rows, whatever the pointer is over. Scrolling up over the rows
+ * brings them back to the top first and then the query part; anywhere else it brings the query part
+ * back straight away and leaves the rows where they are. Anything else under the pointer that
+ * scrolls itself (the editor, a long cell) keeps the wheel while it can.
+ */
+function scrollAsOne(e: WheelEvent, page: HTMLElement) {
+  if (e.defaultPrevented || e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    return;
+  }
+  const table = page.querySelector<HTMLElement>(`[${RESULTS_SCROLL}]`);
+  for (let node = e.target as HTMLElement | null; node && node !== page && node !== table; node = node.parentElement) {
+    if (canScrollY(node, e.deltaY)) {
+      return;
+    }
+  }
+  const unit =
+    e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? page.clientHeight : 1;
+  let delta = e.deltaY * unit;
+  const overRows = table?.contains(e.target as Node) ?? false;
+  const order = delta > 0 ? [page, table] : overRows ? [table, page] : [page];
+  for (const el of order) {
+    if (!el || Math.abs(delta) < 0.5) {
+      continue;
+    }
+    const before = el.scrollTop;
+    el.scrollTop = before + delta;
+    delta -= el.scrollTop - before;
+  }
+  e.preventDefault();
+}
+
+/** Whether the query stays put above the results or scrolls away with the logs (autoExpand). */
+const LAYOUT_OPTIONS: Array<{ label: string; value: 'pinned' | 'scroll'; description: string; icon: IconName }> = [
+  {
+    label: 'Query pinned',
+    value: 'pinned',
+    icon: 'gf-pin',
+    description: 'The query stays on top and the table takes the space under it; Expand results hides the query',
+  },
+  {
+    label: 'Query scrolls away',
+    value: 'scroll',
+    icon: 'arrows-v',
+    description: 'Scrolling the logs moves the query out of view, so the table gets the whole page',
+  },
+];
+
+/** The results keep at least this much on a very short page; less, and the page scrolls. */
+const RESULTS_MIN_HEIGHT = 320;
+const RESULTS_FILL_MIN_HEIGHT = 240;
+
 const getStyles = (theme: GrafanaTheme2) => ({
-  page: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2), padding: theme.spacing(2) }),
+  // Fills Grafana's page area and scrolls itself, so Grafana's own scroll container stays put. It only
+  // scrolls with auto-expand, or when the page is too short for the results' minimum height.
+  page: css({
+    flex: '1 1 0',
+    minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(2),
+    padding: theme.spacing(2),
+    '& > *': { flexShrink: 0 },
+  }),
+  // With auto-expand the page scrolls as one with the table (see scrollAsOne), without a scrollbar of
+  // its own: the table's is the only one.
+  pageAuto: css({ scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }),
   topBar: css({
     display: 'flex',
     alignItems: 'center',
@@ -462,21 +565,53 @@ const getStyles = (theme: GrafanaTheme2) => ({
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
   problems: css({ margin: theme.spacing(0.5, 0, 0, 2), fontFamily: theme.typography.fontFamilyMonospace }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),
+  // As tall as the page: scrolled down, the results fill it and the query part is above, out of view.
+  resultsAuto: css({ height: '100%', minHeight: RESULTS_MIN_HEIGHT }),
+  // What the query part leaves.
+  resultsFill: css({ flex: '1 0 0', minHeight: RESULTS_FILL_MIN_HEIGHT }),
+  // One row whatever the width: the buttons keep their place on the right, and stats that do not fit
+  // next to them are left out, whole and from the end.
   meta: css({
     display: 'flex',
     alignItems: 'center',
-    flexWrap: 'wrap',
     gap: theme.spacing(1),
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
   }),
+  // A wrapping row one line high: a pill that does not fit moves to the second line, which is cut off.
+  stats: css({
+    flex: '1 1 auto',
+    minWidth: 0,
+    height: 20,
+    lineHeight: '20px',
+    overflow: 'hidden',
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    columnGap: theme.spacing(1),
+  }),
+  // Alone on the line, the range shortens with an ellipsis instead.
+  range: css({ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
   stat: css({
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
     padding: theme.spacing(0, 1),
     borderRadius: theme.shape.radius.pill,
     background: theme.colors.background.secondary,
     fontVariantNumeric: 'tabular-nums',
   }),
-  focusToggle: css({ marginLeft: 'auto' }),
+  layout: css({
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    // Narrow pages: icons only, their names in the tooltips. The switch's labels are bare text.
+    [theme.breakpoints.down('lg')]: {
+      '& button > span': { display: 'none' },
+      '& label': { fontSize: 0 },
+      '& label svg': { marginRight: 0 },
+    },
+  }),
   cost: css({ cursor: 'help' }),
   costTip: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.75), maxWidth: 320 }),
   costLink: css({ color: theme.colors.text.link, textDecoration: 'underline' }),

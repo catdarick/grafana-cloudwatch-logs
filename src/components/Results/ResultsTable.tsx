@@ -53,6 +53,9 @@ interface Props {
   onSaveView?: (view: TableView) => void;
 }
 
+/** Marks the rows' scroll area, which shares the wheel with the page (App's scrollAsOne). */
+export const RESULTS_SCROLL = 'data-results-scroll';
+
 const EXPAND_WIDTH = 32;
 const MIN_WIDTH = 48;
 /** Room left for the column that takes up the remaining width. */
@@ -658,6 +661,7 @@ export function ResultsTable({
       <div
         className={s.scroll}
         ref={setScrollElement}
+        {...{ [RESULTS_SCROLL]: '' }}
         onScroll={(e) => {
           scrollPosition.current = { top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft };
         }}
@@ -1083,8 +1087,8 @@ function LogDetailsView({
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
-  wrapper: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1), minHeight: 0 }),
-  // Sticks to the top of the page while scrolling, so search stays reachable.
+  wrapper: css({ flex: '1 1 0', display: 'flex', flexDirection: 'column', gap: theme.spacing(1), minHeight: 0 }),
+  // Sticks to the top when a short window scrolls the page, so search stays reachable.
   toolbar: css({
     position: 'sticky',
     top: 0,
@@ -1112,7 +1116,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
   scroll: css({
     overflow: 'auto',
     overscrollBehaviorX: 'none',
-    maxHeight: 'max(360px, calc(100vh - 220px))',
+    // The rest of the results section, which App sizes to the window.
+    flex: '1 1 0',
+    minHeight: 120,
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
     background: theme.colors.background.primary,

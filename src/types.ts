@@ -98,6 +98,11 @@ export interface PersistedState {
   savedQueries: SavedQuery[];
   /** Grafana time zone id: "utc", "browser" or an IANA name. */
   timeZone: string;
+  /**
+   * Scrolling the logs moves the query part out of view, so the table can take the whole page.
+   * Off (default): the query stays on top and the table takes the space under it.
+   */
+  autoExpand?: boolean;
 }
 
 export interface AppSettings {

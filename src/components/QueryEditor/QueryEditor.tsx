@@ -315,6 +315,8 @@ export function QueryEditor({
           fixedOverflowWidgets: true,
           // Only the language's own suggestions: not every word of the query, nor in comments.
           wordBasedSuggestions: false,
+          // Hands the wheel on to the page when there is nothing to scroll (see App's scrollAsOne).
+          scrollbar: { alwaysConsumeMouseWheel: false },
         }}
         onBeforeEditorMount={registerLogsInsights}
         onEditorDidMount={(editor, monaco) => {

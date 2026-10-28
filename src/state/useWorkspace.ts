@@ -107,10 +107,13 @@ export function useWorkspace() {
 
   const setTimeZone = useCallback((timeZone: string) => setState((s) => ({ ...s, timeZone })), []);
 
+  const setAutoExpand = useCallback((autoExpand: boolean) => setState((s) => ({ ...s, autoExpand })), []);
+
   return {
     state,
     activeTab,
     setTimeZone,
+    setAutoExpand,
     updateTab,
     addTab,
     closeTab,

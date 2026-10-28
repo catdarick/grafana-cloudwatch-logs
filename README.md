@@ -20,6 +20,15 @@ Requires **Grafana 10.4** or later.
   (or selects an identical one) and removes the params from the address. The query is not run automatically.
 - Grafana sorts log rows by time ascending and loses the query's `sort`; the plugin re-applies
   the query's last `sort` to the returned rows (including rows merged from several regions).
+- Results layout, the switch above the histogram (kept with the tabs):
+  - "Query pinned" (default): the page fits Grafana's window, the query stays on top and the table takes the space
+    under it and scrolls on its own. "Expand results" hides the log groups and the editor. On a very short window
+    the page scrolls as well.
+  - "Query scrolls away": the page and the table scroll as one. Scrolling down moves the query out of view first,
+    then the rows; scrolling up over the rows brings them back first, anywhere else it brings the query back
+    straight away. The table then gets the whole window.
+- The line above the histogram stays one line: stats that do not fit are left out from the end, and on narrow
+  pages the buttons next to them show only icons.
 - The histogram above the table is built from the loaded rows (free); selecting or clicking bars narrows
   the loaded rows without a new query. "Run for this range" runs the query for that range.
 - Fields of the raw JSON log (`@message`, nested ones as `kubernetes.pod_name`) can be added as columns via Columns →
