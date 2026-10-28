@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.4
 
 - A query that returns `@message` itself (`fields @timestamp, @message | …`) no longer gets a second copy of it for the expanded row, so its results are about half the size.
 - The Run button shows what the query would scan and cost before it runs, from CloudWatch's free `estimate` command. It updates on its own shortly after the log groups or range change, and after a pause in typing or when the editor loses focus.
