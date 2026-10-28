@@ -1,5 +1,5 @@
 import { FieldType, toDataFrame } from '@grafana/data';
-import { framesToRows, returnsMessage, withMessageField } from './cloudwatch';
+import { estimateQueryString, framesToRows, returnsMessage, sumEstimates, withMessageField } from './cloudwatch';
 
 describe('framesToRows', () => {
   const frame = toDataFrame({
@@ -90,5 +90,22 @@ describe('returnsMessage', () => {
     ['fields a | filter x in (SOURCE g | fields @message)', false],
   ])('%s → %s', (query, expected) => {
     expect(returnsMessage(query)).toBe(expected);
+  });
+});
+
+describe('estimate', () => {
+  it('puts estimate at the end of the query, on its own line', () => {
+    expect(estimateQueryString('fields @message # trailing comment')).toBe(
+      'fields @message # trailing comment\n| estimate'
+    );
+    expect(estimateQueryString('fields a | estimate')).toBe('fields a | estimate');
+  });
+
+  it('adds up the regions', () => {
+    // As Grafana returns it: one frame per region, a number field.
+    const answer = (bytes: number) =>
+      toDataFrame({ fields: [{ name: '@estimatedBytesScanned', type: FieldType.number, values: [bytes] }] });
+    expect(sumEstimates([answer(1000), answer(24)])).toBe(1024);
+    expect(() => sumEstimates([toDataFrame({ fields: [] })])).toThrow('did not return an estimate');
   });
 });

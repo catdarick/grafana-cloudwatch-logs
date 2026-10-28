@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { css, cx } from '@emotion/css';
-import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
+import { css, cx, keyframes } from '@emotion/css';
+import { AppRootProps, GrafanaTheme2, PageLayoutType, colorManipulator } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { Alert, Button, IconName, RadioButtonGroup, TimeZonePicker, Tooltip, useStyles2 } from '@grafana/ui';
-import { cancelQuery, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
+import { cancelQuery, estimateScan, fetchLogGroupFields, runLogsQuery } from '../../api/cloudwatch';
 import { QueryProblem, formatProblem, lintQuery } from '../../language/lint';
 import { addQueryStage } from '../../language/parse';
 import { knownRawFields, useRawFieldHistory } from '../../state/rawFieldHistory';
@@ -25,6 +25,23 @@ import { testIds } from '../testIds';
 
 /** What Grafana 10.4 answers with instead of the data source's own error. */
 const GENERIC_PLUGIN_ERROR = 'An error occurred within the plugin';
+
+/** CloudWatch's estimate of what a tab's query would scan, for the inputs in `key`. */
+interface ScanEstimateState {
+  /** Query, log groups, time range and data source it was made for. */
+  key: string;
+  /** The same without the query: tells a query edit from other changes. */
+  inputs: string;
+  running?: boolean;
+  /** While running: the previous estimate, shown faded until the new one comes. */
+  bytes?: number;
+  error?: string;
+}
+
+/** After a change of log groups, range or data source. */
+const ESTIMATE_DELAY = 800;
+/** After an edit of the query, unless the editor loses focus first. */
+const QUERY_ESTIMATE_DELAY = 5000;
 
 function defaultDatasourceUid(settings: AppSettings): string | undefined {
   return settings.datasourceUid || getDataSourceSrv().getList({ type: 'cloudwatch' })[0]?.uid;
@@ -94,8 +111,70 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const defaultRegion = settings.defaultRegion || DEFAULT_REGION;
 
   const requestId = (id: string) => `cloudwatch-logs-app-${id}`;
+  const estimateId = (id: string) => `cloudwatch-logs-app-estimate-${id}`;
   const canRun =
     Boolean(datasourceUid) && tab.logGroups.length > 0 && tab.query.trim() !== '' && isValidRange(tab.timeRange);
+  const costPerGb = settings.costPerGb ?? DEFAULT_COST_PER_GB;
+
+  // What the query would scan, estimated by CloudWatch (free) once the inputs stop changing: shortly
+  // after a change of log groups, range or data source; after a longer pause in typing the query, or
+  // when the editor loses focus. A query with syntax errors is not sent: it would only fail.
+  const [estimates, setEstimates] = useState<Record<string, ScanEstimateState | undefined>>({});
+  const estimateInputs = JSON.stringify([
+    tab.logGroups.map((g) => `${g.region}:${g.name}`),
+    tab.timeRange,
+    datasourceUid,
+  ]);
+  const estimateKey = JSON.stringify([tab.query, estimateInputs]);
+  const queryHasErrors = useMemo(() => lintQuery(tab.query).some((p) => p.severity === 'error'), [tab.query]);
+  const canEstimate = canRun && !queryHasErrors;
+  const estimateState = estimates[tab.id];
+  const estimateFresh = estimateState?.key === estimateKey;
+  const onlyQueryChanged = estimateState?.inputs === estimateInputs;
+
+  /** Asks CloudWatch what the active tab's query would scan, without running it. */
+  const runEstimate = async () => {
+    if (!datasourceUid || !canEstimate) {
+      return;
+    }
+    const tabId = tab.id;
+    const key = estimateKey;
+    const inputs = estimateInputs;
+    const keep = (next: ScanEstimateState) =>
+      setEstimates((e) => (e[tabId]?.key === key ? { ...e, [tabId]: next } : e));
+    setEstimates((e) => ({ ...e, [tabId]: { key, inputs, running: true, bytes: e[tabId]?.bytes } }));
+    try {
+      const bytes = await estimateScan({
+        datasourceUid,
+        requestId: estimateId(tabId),
+        query: tab.query,
+        logGroups: tab.logGroups,
+        ...toEpochRange(tab.timeRange),
+      });
+      keep({ key, inputs, bytes });
+    } catch (e) {
+      // Cancelled: a newer estimate of the tab took its place.
+      if (!isCancelled(e)) {
+        keep({ key, inputs, error: errorMessage(e) });
+      }
+    }
+  };
+  const runEstimateRef = useRef(runEstimate);
+  runEstimateRef.current = runEstimate;
+  useEffect(() => {
+    if (!canEstimate || estimateFresh) {
+      return;
+    }
+    const delay = onlyQueryChanged ? QUERY_ESTIMATE_DELAY : ESTIMATE_DELAY;
+    const timer = setTimeout(() => runEstimateRef.current(), delay);
+    return () => clearTimeout(timer);
+  }, [canEstimate, estimateFresh, estimateKey, onlyQueryChanged]);
+  // Done editing the query: no need to wait out the delay.
+  const estimateNow = () => {
+    if (canEstimate && !estimateFresh) {
+      runEstimate();
+    }
+  };
 
   /** Runs the active tab; overrides cover changes made in the same click, before state has updated. */
   const run = async (override: { query?: string; timeRange?: TimeRangeValue } = {}) => {
@@ -206,6 +285,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
             onSelect={ws.selectTab}
             onClose={(id) => {
               cancelQuery(requestId(id));
+              cancelQuery(estimateId(id));
               tableViews.forget(id);
               ws.closeTab(id);
             }}
@@ -256,6 +336,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                 relativeTime={tab.timeRange.mode === 'relative'}
                 onCopyLink={copyLink}
                 showHints={genericError}
+                onBlur={estimateNow}
               />
               <section className={s.timeColumn}>
                 <TimeRangePicker
@@ -283,9 +364,33 @@ function App({ meta }: AppRootProps<AppSettings>) {
                     className={s.runButton}
                     disabled={!canRun}
                     onClick={() => run()}
-                    tooltip="Ctrl/Cmd + Enter"
+                    tooltip={
+                      <RunTooltip
+                        bytes={estimateFresh && !estimateState?.running ? estimateState?.bytes : undefined}
+                        error={estimateFresh ? estimateState?.error : undefined}
+                        updating={canEstimate && (!estimateFresh || Boolean(estimateState?.running))}
+                        costPerGb={costPerGb}
+                      />
+                    }
                   >
-                    Run query
+                    <span className={s.runLabel}>
+                      <span>Run query</span>
+                      {/* Faded while it is not for the current inputs; a wave while CloudWatch is asked. */}
+                      {canEstimate && (estimateState?.bytes !== undefined || estimateState?.running) && (
+                        <span className={cx(s.runEstimate, estimateState?.running && s.runEstimateWave)}>
+                          <span
+                            className={cx(
+                              (!estimateFresh || estimateState?.running) && s.runEstimateStale,
+                              estimateState?.bytes === undefined && s.runEstimatePlaceholder
+                            )}
+                          >
+                            {estimateState?.bytes !== undefined
+                              ? scanText(estimateState.bytes, costPerGb)
+                              : '≈ 00 MB · $0.0000'}
+                          </span>
+                        </span>
+                      )}
+                    </span>
                   </Button>
                 )}
                 {tab.logGroups.length === 0 && <span className={s.hint}>Select at least one log group</span>}
@@ -333,11 +438,7 @@ function App({ meta }: AppRootProps<AppSettings>) {
                     </span>
                   ))}
                 {result.stats?.bytesScanned !== undefined && (
-                  <CostBadge
-                    bytes={result.stats.bytesScanned}
-                    costPerGb={settings.costPerGb ?? DEFAULT_COST_PER_GB}
-                    className={s.stat}
-                  />
+                  <CostBadge bytes={result.stats.bytesScanned} costPerGb={costPerGb} className={s.stat} />
                 )}
                 {statsParts(result)
                   .slice(2)
@@ -464,6 +565,38 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
 }
 
+/** "≈ 40 MB · $0.00020": what the query would scan, and what that costs. */
+function scanText(bytes: number, costPerGb: number): string {
+  // One ≈ for both: "≈ 40 MB · $0.00020", or "≈ 2 KB · < $0.0001".
+  return `≈ ${formatBytes(bytes)} · ${formatCost(estimateCost(bytes, costPerGb)).replace(/^≈ /, '')}`;
+}
+
+/** The Run button's tooltip: the shortcut, and what CloudWatch estimates the query scans. */
+interface RunTooltipProps {
+  bytes?: number;
+  error?: string;
+  /** A new estimate is due or on its way: the figure on the button is for the previous inputs. */
+  updating: boolean;
+  costPerGb: number;
+}
+
+function RunTooltip({ bytes, error, updating, costPerGb }: RunTooltipProps) {
+  return (
+    <>
+      <div>Ctrl/Cmd + Enter</div>
+      {updating && <div>Updating the scan estimate for the changes…</div>}
+      {bytes !== undefined && (
+        <div>
+          CloudWatch estimates this query scans {formatBytes(bytes)}, {formatCost(estimateCost(bytes, costPerGb))} at $
+          {costPerGb} per GB. The estimate itself is free.
+        </div>
+      )}
+      {/* Grafana 10.4 hides CloudWatch's reason behind a generic message: no use repeating it. */}
+      {error && <div>Could not estimate the scan{error === GENERIC_PLUGIN_ERROR ? '.' : `: ${error}`}</div>}
+    </>
+  );
+}
+
 function isCancelled(e: unknown): boolean {
   return Boolean(e && typeof e === 'object' && 'cancelled' in e && (e as { cancelled?: boolean }).cancelled);
 }
@@ -525,6 +658,10 @@ const LAYOUT_OPTIONS: Array<{ label: string; value: 'pinned' | 'scroll'; descrip
   },
 ];
 
+const { alpha } = colorManipulator;
+
+const wave = keyframes({ from: { transform: 'translateX(-100%)' }, to: { transform: 'translateX(100%)' } });
+
 /** The results keep at least this much on a very short page; less, and the page scrolls. */
 const RESULTS_MIN_HEIGHT = 320;
 const RESULTS_FILL_MIN_HEIGHT = 240;
@@ -561,7 +698,55 @@ const getStyles = (theme: GrafanaTheme2) => ({
   timeColumn: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2) }),
   // Same size whatever the picker above shows (Relative grid or Absolute fields).
   // Pinned to the bottom of the column so it does not move when the picker above changes height.
-  runButton: css({ flex: '0 0 auto', height: theme.spacing(6), marginTop: 'auto' }),
+  // The label fills the button: the action on the left, the estimate on the right.
+  runButton: css({
+    flex: '0 0 auto',
+    height: theme.spacing(6),
+    marginTop: 'auto',
+    justifyContent: 'flex-start',
+    '& > span:last-child': { flex: 1, minWidth: 0 },
+  }),
+  // Grafana's button content is a flex row of its own: the label has to grow to fill it.
+  runLabel: css({
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+  }),
+  // A price tag on the button: what the query would scan and cost. Quiet, so the action stays first.
+  runEstimate: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    minWidth: 0,
+    padding: theme.spacing(0.25, 1),
+    borderRadius: theme.shape.radius.pill,
+    background: alpha(theme.colors.primary.contrastText, 0.12),
+    opacity: 0.75,
+    fontSize: theme.typography.bodySmall.fontSize,
+    fontWeight: theme.typography.fontWeightRegular,
+    lineHeight: theme.typography.bodySmall.lineHeight,
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+    position: 'relative',
+    overflow: 'hidden',
+  }),
+  // The figure is for earlier inputs: kept, but faded, until the new one comes.
+  runEstimateStale: css({ opacity: 0.55 }),
+  // Before the first figure: the chip's usual width, with nothing to read.
+  runEstimatePlaceholder: css({ color: 'transparent' }),
+  // A light band sweeping across the chip: the figure is being worked out, the button itself is fine.
+  runEstimateWave: css({
+    '&::after': {
+      content: '""',
+      position: 'absolute',
+      inset: 0,
+      background: `linear-gradient(90deg, transparent, ${alpha(theme.colors.primary.contrastText, 0.3)}, transparent)`,
+      animation: `${wave} 1.2s ease-in-out infinite`,
+    },
+    '@media (prefers-reduced-motion: reduce)': { '&::after': { display: 'none' } },
+  }),
   hint: css({ color: theme.colors.text.secondary, fontSize: theme.typography.bodySmall.fontSize, textAlign: 'center' }),
   problems: css({ margin: theme.spacing(0.5, 0, 0, 2), fontFamily: theme.typography.fontFamilyMonospace }),
   results: css({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1) }),

@@ -45,6 +45,8 @@ interface Props {
   onCopyLink: (fixedTime: boolean) => void;
   /** Also underline what is valid but often a mistake: set once the query has failed. */
   showHints: boolean;
+  /** The editor (and its popups) lost focus. */
+  onBlur?: () => void;
 }
 
 export function QueryEditor({
@@ -61,6 +63,7 @@ export function QueryEditor({
   pendingFilters,
   onApplyFilter,
   showHints,
+  onBlur,
 }: Props) {
   const s = useStyles2(getStyles);
   const [editor, setEditor] = useState<{ editor: MonacoEditor; monaco: Monaco }>();
@@ -166,7 +169,9 @@ export function QueryEditor({
   const runRef = useRef(onRun);
   const saveRef = useRef(save);
   const fieldsRef = useRef(fields);
+  const blurRef = useRef(onBlur);
   useLayoutEffect(() => {
+    blurRef.current = onBlur;
     onChangeRef.current = (value: string) => onChange(value, savedQueryName);
     runRef.current = onRun;
     saveRef.current = save;
@@ -323,6 +328,7 @@ export function QueryEditor({
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runRef.current());
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
           editor.onDidChangeModelContent(() => onChangeRef.current(editor.getValue()));
+          editor.onDidBlurEditorWidget(() => blurRef.current?.());
           // The text layer sits above view zones and takes the mouse, so find the pending filter line
           // under the pointer from Monaco's hit test and the zone's position.
           const lineAt = (e: { target: { type: number; detail?: unknown }; event: { browserEvent: MouseEvent } }) => {

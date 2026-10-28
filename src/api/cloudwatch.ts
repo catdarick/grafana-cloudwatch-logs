@@ -103,15 +103,28 @@ export interface RunQueryArgs {
  */
 export async function runLogsQuery(args: RunQueryArgs): Promise<QueryResult> {
   const startedAt = Date.now();
-  const byRegion = groupByRegion(args.logGroups);
+  const parsed = await queryLogs(args, withMessageField(args.query));
+  const result = applyQuerySort(framesToRows(parsed.data as DataFrame[], args.query), args.query);
+  return {
+    ...result,
+    query: args.query,
+    ranAt: startedAt,
+    durationMs: Date.now() - startedAt,
+    from: args.from,
+    to: args.to,
+    error: errorText(parsed),
+  };
+}
 
-  const queries = Array.from(byRegion.entries()).map(([region, groups], i) => ({
+/** Sends the expression for the log groups of each region, as one /api/ds/query request. */
+async function queryLogs(args: RunQueryArgs, expression: string) {
+  const queries = Array.from(groupByRegion(args.logGroups).entries()).map(([region, groups], i) => ({
     refId: `R${i}`,
     datasource: { type: 'cloudwatch', uid: args.datasourceUid },
     queryMode: 'Logs',
     region,
     id: '',
-    expression: withMessageField(args.query),
+    expression,
     logGroupNames: groups.map((g) => g.name),
     // Only used when cross-account querying is enabled; requires every group to have an ARN.
     ...(groups.every((g) => g.arn) ? { logGroups: groups.map((g) => ({ arn: g.arn, name: g.name })) } : {}),
@@ -123,22 +136,59 @@ export async function runLogsQuery(args: RunQueryArgs): Promise<QueryResult> {
     showErrorAlert: false,
     data: { from: String(args.from), to: String(args.to), queries },
   });
+  return toDataQueryResponse(response);
+}
 
-  const parsed = toDataQueryResponse(response);
-  const result = applyQuerySort(framesToRows(parsed.data as DataFrame[], args.query), args.query);
-  return {
-    ...result,
-    query: args.query,
-    ranAt: startedAt,
-    durationMs: Date.now() - startedAt,
-    from: args.from,
-    to: args.to,
-    error:
-      parsed.errors
-        ?.map((e) => e.message)
-        .filter(Boolean)
-        .join('; ') || undefined,
-  };
+function errorText(parsed: ReturnType<typeof toDataQueryResponse>): string | undefined {
+  return (
+    parsed.errors
+      ?.map((e) => e.message)
+      .filter(Boolean)
+      .join('; ') || undefined
+  );
+}
+
+/**
+ * The query with CloudWatch's `estimate` at the end: it answers how many bytes the query would scan,
+ * without scanning (and without a charge). A query that already ends with it is left as it is.
+ */
+export function estimateQueryString(query: string): string {
+  const { stages } = parseQuery(query);
+  return stages[stages.length - 1]?.command?.name === 'estimate' ? query : `${query}\n| estimate`;
+}
+
+/** The field CloudWatch answers an `estimate` with. */
+const ESTIMATE_FIELD = '@estimatedBytesScanned';
+
+/**
+ * Bytes the query would scan in its log groups and range, summed over regions. Sent without our
+ * @message copy, which does not change what is scanned; Grafana's own prefix keeps estimate last.
+ */
+export async function estimateScan(args: RunQueryArgs): Promise<number> {
+  const parsed = await queryLogs(args, estimateQueryString(args.query));
+  const error = errorText(parsed);
+  if (error) {
+    throw new Error(error);
+  }
+  return sumEstimates(parsed.data as DataFrame[]);
+}
+
+export function sumEstimates(frames: DataFrame[]): number {
+  let total: number | undefined;
+  for (const field of frames.flatMap((f) => f.fields)) {
+    if (field.name !== ESTIMATE_FIELD) {
+      continue;
+    }
+    for (const value of field.values) {
+      if (value !== null && value !== '' && Number.isFinite(Number(value))) {
+        total = (total ?? 0) + Number(value);
+      }
+    }
+  }
+  if (total === undefined) {
+    throw new Error('CloudWatch did not return an estimate');
+  }
+  return total;
 }
 
 const inFlight = new Map<string, { subscription: Subscription; reject: (reason: unknown) => void }>();

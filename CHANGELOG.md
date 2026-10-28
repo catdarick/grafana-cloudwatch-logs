@@ -3,6 +3,7 @@
 ## Unreleased
 
 - A query that returns `@message` itself (`fields @timestamp, @message | …`) no longer gets a second copy of it for the expanded row, so its results are about half the size.
+- The Run button shows what the query would scan and cost before it runs, from CloudWatch's free `estimate` command. It updates on its own shortly after the log groups or range change, and after a pause in typing or when the editor loses focus.
 - Results layout switch above the histogram. "Query pinned" (default) fits the page to the window, so only the table scrolls; "Query scrolls away" scrolls the page and the table as one, so the table can take the whole window. No more two scrollbars, one inside the other.
 - The line above the histogram no longer wraps: stats that do not fit are left out from the end, and on narrow pages the buttons show only icons.
 - Running a tab again while it is still running no longer ends its running state early, and an older run can no longer replace the newer one's results.

@@ -42,6 +42,11 @@ Requires **Grafana 10.4** or later.
   `@log`, `@logStream`). Times in the selected zone, UTF-8 with a BOM.
 - Next to "Scanned …" is an estimate of the query's cost: GB scanned × price per GB (default $0.005,
   set in the plugin settings). AWS does not report the cost, so this is an estimate from the list price.
+- Before a run, the Run button shows what the query would scan and cost (`≈ 40 MB · $0.00020`). It is CloudWatch's
+  own estimate: the query with `| estimate` at the end, which scans nothing and is free. It is asked for 0.8 s after
+  a change of log groups, range or data source, and 5 s after the last edit of the query or as soon as the editor
+  loses focus; not for a query with syntax errors. A faded figure is for the previous inputs, a wave means a new one
+  is on its way. Grafana's backend polls CloudWatch once a second, so an estimate takes a second or two.
 - Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
   the whole log (the JSON in `@message`), not just the query's fields. A query that returns `@message` itself
   (`fields @timestamp, @message | …`) is sent as it is and its own `@message` is used, so the message does not come
