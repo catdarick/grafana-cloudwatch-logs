@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A query that returns `@message` itself (`fields @timestamp, @message | …`) no longer gets a second copy of it for the expanded row, so its results are about half the size.
+
 ## 1.0.3
 
 - Absolute time range: a calendar in the From and To fields picks the days and the time of each end, in the selected time zone.

@@ -8,7 +8,9 @@ import {
   toDataQueryResponse,
 } from '@grafana/runtime';
 import { LogDetails, LogGroupRef, QueryResult, QueryStats } from '../types';
-import { mentionsField, sortKeys } from '../language/parse';
+import { mentionsField, parseQuery, sortKeys } from '../language/parse';
+import { unquoteField } from '../language/spec';
+import { Token } from '../language/tokenize';
 import { sortOrder } from '../utils/table';
 
 // Fields Grafana adds to every Logs Insights query (see pkg/tsdb/cloudwatch/log_actions.go).
@@ -18,13 +20,51 @@ const LOG_STREAM_FIELD = '__logstream__grafana_internal__';
 // Our own addition, named like Grafana's so it is hidden the same way.
 const MESSAGE_FIELD = '__message__grafana_internal__';
 
+/** Commands that keep every field of the stages before them: after them, @message is still there. */
+const KEEPS_FIELDS = new Set(['fields', 'filter', 'filterindex', 'sort', 'limit', 'parse', 'dedup', 'unmask', 'where']);
+
+/**
+ * Whether the query's rows carry @message as it is: a `fields` command lists it bare (not renamed,
+ * not inside a function), and every command keeps the fields of the ones before (no stats, display,
+ * pattern...). Then asking for our own copy of it would only double what comes to the browser.
+ */
+export function returnsMessage(query: string): boolean {
+  const { stages } = parseQuery(query);
+  if (stages.some((s) => !KEEPS_FIELDS.has(s.command?.name.toLowerCase() ?? ''))) {
+    return false;
+  }
+  return stages.some((s) => s.command?.name === 'fields' && listsBare(s.args, '@message'));
+}
+
+/** Whether a comma-separated list names the field on its own, at the top level. */
+function listsBare(args: Token[], field: string): boolean {
+  let depth = 0;
+  return args.some((t, i) => {
+    if (t.type === 'open') {
+      depth++;
+    } else if (t.type === 'close') {
+      depth = Math.max(0, depth - 1);
+    }
+    const prev = args[i - 1];
+    const next = args[i + 1];
+    return (
+      depth === 0 &&
+      t.type === 'word' &&
+      unquoteField(t.text) === field &&
+      (!prev || prev.type === 'comma') &&
+      (!next || next.type === 'comma')
+    );
+  });
+}
+
 /**
  * Asks for the raw @message alongside whatever the query selects, so an expanded row can show the
  * whole log event. Logs Insights keeps fields from every `fields` command, the same thing Grafana
- * relies on when it prepends @log and @logStream.
+ * relies on when it prepends @log and @logStream. A query that returns @message itself is left as
+ * it is, so the message does not come twice.
  */
 export function withMessageField(query: string): string {
-  return `fields @message as ${MESSAGE_FIELD}\n| ${query}`;
+  return returnsMessage(query) ? query : `fields @message as ${MESSAGE_FIELD}\n| ${query}`;
 }
 
 interface LogGroupsResponseItem {
@@ -159,7 +199,8 @@ export function framesToRows(
     addStats(stats, frame);
     const internal = (name: string) => frame.fields.find((f) => f.name === name);
     const timestamp = internal('@timestamp');
-    const message = internal(MESSAGE_FIELD);
+    // Our copy, or the query's own @message when it returns it (then we do not ask for a copy).
+    const message = internal(MESSAGE_FIELD) ?? internal('@message');
     const logGroup = internal(LOG_FIELD);
     const logStream = internal(LOG_STREAM_FIELD);
     const visible = frame.fields.filter(

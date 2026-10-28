@@ -34,8 +34,9 @@ Requires **Grafana 10.4** or later.
 - Next to "Scanned …" is an estimate of the query's cost: GB scanned × price per GB (default $0.005,
   set in the plugin settings). AWS does not report the cost, so this is an estimate from the list price.
 - Every query is prefixed with `fields @message as __message__grafana_internal__` so that expanding a row shows
-  the whole log (the JSON in `@message`), not just the query's fields. `stats` queries and queries with `display` lack it,
-  and the row's fields are shown instead.
+  the whole log (the JSON in `@message`), not just the query's fields. A query that returns `@message` itself
+  (`fields @timestamp, @message | …`) is sent as it is and its own `@message` is used, so the message does not come
+  to the browser twice. `stats` queries and queries with `display` lack it, and the row's fields are shown instead.
 
 ## Layout
 

@@ -1,5 +1,5 @@
 import { FieldType, toDataFrame } from '@grafana/data';
-import { framesToRows, withMessageField } from './cloudwatch';
+import { framesToRows, returnsMessage, withMessageField } from './cloudwatch';
 
 describe('framesToRows', () => {
   const frame = toDataFrame({
@@ -49,10 +49,46 @@ describe('framesToRows', () => {
     );
   });
 
+  it('leaves a query that returns @message itself as it is', () => {
+    const query = 'fields @timestamp, @message | sort @timestamp desc';
+    expect(withMessageField(query)).toBe(query);
+  });
+
+  it("takes the raw message from the query's own @message when there is no copy", () => {
+    const own = toDataFrame({
+      fields: [
+        { name: '@timestamp', type: FieldType.time, values: [1760000000000] },
+        { name: '@message', type: FieldType.string, values: ['{"a":1}'] },
+      ],
+    });
+    const { fields, details } = framesToRows([own], 'fields @timestamp, @message');
+    expect(fields).toEqual(['@timestamp', '@message']);
+    expect(details[0].message).toBe('{"a":1}');
+  });
+
   it('keeps @timestamp when the query asks for it', () => {
     const { fields, rows, timeFields } = framesToRows([frame], 'fields @timestamp, message');
     expect(fields[0]).toBe('@timestamp');
     expect(timeFields).toEqual(['@timestamp']);
     expect(rows[0]['@timestamp']).toBe('1760000000000');
+  });
+});
+
+describe('returnsMessage', () => {
+  it.each([
+    ['fields @timestamp, @message | sort @timestamp desc | limit 100', true],
+    ['fields @message', true],
+    ['filter level = "error" | fields @timestamp, `@message` | limit 5', true],
+    ['fields @timestamp, @message | parse @message "* *" as a, b | dedup a', true],
+    ['fields @timestamp | filter @message like /x/', false],
+    ['fields @message as msg', false],
+    ['fields strlen(@message)', false],
+    ['fields @timestamp, @message | stats count() by bin(5m)', false],
+    ['fields @timestamp, @message | display @timestamp', false],
+    ['fields @message | pattern @message', false],
+    ['fields @message | filter x in (SOURCE g | fields @message)', true],
+    ['fields a | filter x in (SOURCE g | fields @message)', false],
+  ])('%s → %s', (query, expected) => {
+    expect(returnsMessage(query)).toBe(expected);
   });
 });
