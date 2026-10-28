@@ -3,6 +3,7 @@
 ## Unreleased
 
 - A query that returns `@message` itself (`fields @timestamp, @message | …`) no longer gets a second copy of it for the expanded row, so its results are about half the size.
+- Running a tab again while it is still running no longer ends its running state early, and an older run can no longer replace the newer one's results.
 
 ## 1.0.3
 

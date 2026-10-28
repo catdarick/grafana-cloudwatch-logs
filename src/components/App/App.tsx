@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { AppRootProps, GrafanaTheme2, PageLayoutType } from '@grafana/data';
 import { DataSourcePicker, PluginPage, config, getDataSourceSrv, locationService } from '@grafana/runtime';
@@ -40,6 +40,8 @@ function App({ meta }: AppRootProps<AppSettings>) {
   const [results, setResults] = useState<Record<string, QueryResult | undefined>>({});
   const [running, setRunning] = useState<Record<string, boolean>>({});
   const [runError, setRunError] = useState<Record<string, string | undefined>>({});
+  // Runs per tab: only the latest one of a tab may set its result.
+  const runCount = useRef<Record<string, number>>({});
   // Table filters of the active tab's results as query clauses, offered as ghost lines in the editor.
   const [tableClauses, setTableClauses] = useState<string[]>([]);
   // Hides log groups and the editor so the results get the whole page.
@@ -101,6 +103,9 @@ function App({ meta }: AppRootProps<AppSettings>) {
       return;
     }
     const tabId = tab.id;
+    const runId = (runCount.current[tabId] ?? 0) + 1;
+    runCount.current[tabId] = runId;
+    const latest = () => runCount.current[tabId] === runId;
     const logGroups = tab.logGroups;
     const query = override.query ?? tab.query;
     const { from, to } = toEpochRange(override.timeRange ?? tab.timeRange);
@@ -115,17 +120,22 @@ function App({ meta }: AppRootProps<AppSettings>) {
         from,
         to,
       });
+      if (!latest()) {
+        return;
+      }
       setResults((r) => ({ ...r, [tabId]: result }));
       if (!result.error) {
         // After the table has rendered: this parses every message once more.
         setTimeout(() => rawFields.record(logGroups, result.details));
       }
     } catch (e) {
-      if (!isCancelled(e)) {
+      if (latest() && !isCancelled(e)) {
         setRunError((errs) => ({ ...errs, [tabId]: errorMessage(e) }));
       }
     } finally {
-      setRunning((r) => ({ ...r, [tabId]: false }));
+      if (latest()) {
+        setRunning((r) => ({ ...r, [tabId]: false }));
+      }
     }
   };
 
